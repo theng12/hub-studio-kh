@@ -93,10 +93,10 @@ VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 # spawns the bridge with this tree, resolved as the sibling of its own.
 #
 # Moved at 0.6.248: the same packages and the same measured runs, except that CPython's generated
-# sysconfigdata no longer records the build user's home path
-# (packaging/yue2-runtime/neutralize_prefix.py). The previous pin was
+# sysconfigdata and `lib/libpython3.12.dylib`'s install name no longer record the build user's home
+# path (packaging/yue2-runtime/neutralize_prefix.py). The previous pin was
 # 75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4.
-YUE2_RUNTIME_SHA256 = 'fd405f5c295014493980372b8b023c3c87bc74d4bd88469007064c1d5b96739c'
+YUE2_RUNTIME_SHA256 = '5380877f826205ac4ef6c2025402f4a0b9086acb8a6b6bfc3231672525a86d48'
 
 # What a Hub release ships, declared here so a build cannot quietly narrow it.
 #

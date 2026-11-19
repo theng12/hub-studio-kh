@@ -76,7 +76,21 @@ class NeutralizePrefix(unittest.TestCase):
         try:
             # APFS clone: read-only content, no real copy cost.
             subprocess.run(["cp", "-cR", str(runtime), str(work)], check=True, timeout=300)
-            neutralize_prefix.neutralize(work)
+            homes = neutralize_prefix.neutralize(work)
+            binaries = neutralize_prefix.neutralize_binaries(work)
+            # The builder's own home must be gone from every file — including binaries. Other
+            # `/Users/...` strings belong to third-party wheels (a CI runner, a package author)
+            # and are out of scope: this release's bar is the build user, not every stranger.
+            self.assertTrue(homes, "the installed runtime should still carry the build home")
+            for home in set(homes):
+                found = subprocess.run(["grep", "-ral", home, str(work)],
+                                       capture_output=True, text=True)
+                self.assertEqual(found.stdout.split(), [], home)
+            # The library's own id is the one Mach-O carrier, and it must read the neutral root.
+            self.assertEqual(len(binaries), 1, binaries)
+            ident = subprocess.run(["otool", "-D", str(work / "lib/libpython3.12.dylib")],
+                                   capture_output=True, text=True).stdout.splitlines()[-1]
+            self.assertEqual(ident, neutralize_prefix.NEUTRAL + "/lib/libpython3.12.dylib")
             out = subprocess.run(
                 [str(work / "bin/python3"), "-I", "-c",
                  "import sysconfig, sys; print(sysconfig.get_config_var('prefix')); print(sys.prefix)"],
