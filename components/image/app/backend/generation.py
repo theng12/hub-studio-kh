@@ -98,6 +98,11 @@ SIZE_PRESETS = {
     '2:3': (800, 1200), '5:4': (1120, 896), '4:5': (896, 1120),
     '21:9': (1680, 720), '2:1': (1408, 704), '1:2': (704, 1408),
 }
+# FLUX.2 Klein's '16:9' (1280x720) retired 2026-11-19: the entry stays in SIZE_PRESETS for
+# Z-Image and is the way back if this family ever offers it again.
+FLUX2_SIZE_PRESETS = {key: pixels for key, pixels in SIZE_PRESETS.items() if key != '16:9'}
+RETIRED_FLUX2_16X9 = ('The 1280x720 (16:9) size has been retired for FLUX.2 Klein; '
+                      'choose 1024x576 (16:9 small) or 1344x768 (7:4) instead.')
 QWEN_SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
     # 1024x576 is exactly 16:9 as well, so it cannot reuse the '16:9' key (one row per key). The
@@ -296,8 +301,9 @@ FLUX2_KLEIN = ImageModel(
     label='FLUX.2 Klein 4B MLX 4-bit',
     family='flux2-klein',
     model_class='mflux.models.flux2.variants.txt2img.flux2_klein:Flux2Klein',
-    defaults={'aspect_ratio': '16:9', 'resolution': '1K', 'steps': 4,
+    defaults={'aspect_ratio': '16:9 small', 'resolution': '1K', 'steps': 4,
               'guidance': 1.0, 'seed': -1},
+    size_presets=FLUX2_SIZE_PRESETS,
     limits={'min_steps': 2, 'max_steps': 100, 'min_guidance': 0.0, 'max_guidance': 30.0,
             'min_seed': -1, 'max_seed': 2**32 - 1, 'max_prompt': 1900},
     # Free memory needed before start; owner chose 2.8 GB on 2026-10-02 for headroom - measured 8 GB M1+M2 runs started cleanly from 3.76 GB free
@@ -2012,7 +2018,13 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
         else:
             ratio = next((name for name, pixels in presets.items()
                           if dimensions == pixels), 'custom')
-    if ((ratio not in presets and ratio != 'custom')
+    # A stored job carries the retired pixels explicitly; replaying it must still render.
+    legacy_16x9 = (model is FLUX2_KLEIN and ratio == '16:9'
+                   and dimensions == (1280, 720)
+                   and all(type(value) is int for value in dimensions))
+    if model is FLUX2_KLEIN and ratio == '16:9' and not legacy_16x9:
+        raise ValueError(RETIRED_FLUX2_16X9)
+    if ((ratio not in presets and ratio != 'custom' and not legacy_16x9)
             or raw.get('resolution', defaults['resolution']) != '1K'):
         raise ValueError('Choose a qualified 1K aspect ratio')
     width, height = presets.get(ratio, dimensions)
@@ -2021,6 +2033,9 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
                         if dimensions == pixels), None)
         if matched is not None:
             ratio = matched
+        elif legacy_16x9:
+            # This canvas was qualified before the retirement; the new custom bound never applied.
+            ratio = 'custom'
         else:
             # The Gateway forwards both pixels verbatim: this is the trust boundary. An explicit
             # custom canvas is admitted as given, never coerced to a preset, rounded, or guessed.

@@ -311,6 +311,24 @@ def create_app(manager: GenerationManager, token: str) -> FastAPI:
                                     'width': default_width, 'height': default_height},
             'guidance_ignored': model.guidance_ignored,
             'image_sizes': sizes,
+            # The renderable geometry, beside the operator's offered list. `sizes` is authoritative:
+            # every size this model can be asked for by name, and several of FLUX2's own presets
+            # (1280x720, 1200x800) are deliberately not multiples of 32. The 32 grid therefore
+            # applies **to custom width/height only** and is published scoped — never as a
+            # model-wide claim, which would say the model cannot render its own presets. `source`
+            # tells the engine's rule from this app's policy. min/max stay null: `model.limits`
+            # states steps, guidance, seed and prompt only, so no canvas bounds are published.
+            'render_constraints': {
+                'multiple': {
+                    'value': model.dimension_multiple or 32,
+                    'applies_to': 'custom',
+                    'source': 'engine' if model.dimension_multiple else 'policy',
+                },
+                'min': None,
+                'max': None,
+                'sizes': [{'width': width, 'height': height}
+                          for width, height in presets.values()],
+            },
             'generation_limits': {key: value for key, value in model.limits.items()
                                   if key != 'max_prompt'},
             'max_prompt_characters': model.limits['max_prompt'],
