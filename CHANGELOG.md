@@ -2,6 +2,18 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.252 — 2026-11-19
+
+- **One more size, and you can type your own.** Both image models now offer **1024×576** (unchanged default) and **1344×768**, a wider picture that suits 7:4 frames. You can also give a width and height yourself; the app accepts them only when both are multiples of 32, and says which number is wrong when they are not — it never quietly rounds or picks a different size for you.
+- **A 7:4 picture is trimmed to 16:9, and the app says so.** 1344×768 is 1.6% narrower than the video frame, so each result is centre-cropped to 1344×756 — a 12-pixel trim, no resizing — and the run records the exact pixels rendered and the crop applied, so a picture is never silently stretched.
+
+### Technical notes
+- `7:4: (1344, 768)` added to `SIZE_PRESETS`, `QWEN_SIZE_PRESETS` and `QWEN_MFLUX_SIZE_PRESETS` in `components/image/app/backend/generation.py`; defaults unchanged. The key is its own — never an existing ratio key, and never relabelled `16:9`.
+- Both published lists come from `size_presets(model)`: the row's `image_sizes` and `parameters.aspect_ratio.enum`. The Gateway intersects them and silently drops a size present in only one, so `tests/test_image_sizes_0252.py` asserts the key in both for both models.
+- `validate_request()` is the door: explicit width/height are accepted only as positive multiples of 32 (`"Width 2050 must be a positive multiple of 32"`), never coerced, rounded or replaced; a pair matching a preset keeps that preset's key, anything else becomes `custom`.
+- The crop runs after the engine's PNG is verified, with PIL's crop and no resampling; the job record carries `render_width`/`render_height` (engine pixels) and `crop {source, output, offset}` or `null`, while `width`/`height` stay the delivered pixels. 1344×768 → source [1344,768], output [1344,756], offset [0,6].
+- Tests: `tests/test_image_sizes_0252.py` (9), `tests/test_image_standalone.py` (33), `tests/test_image_qwen21.py` (5). Two existing assertions changed because the owner changed the rule: a 2048 width is now a legal custom canvas, and qwen's preset set now includes `7:4`.
+
 ## 0.6.251 — 2026-11-19
 
 - **Stopping the app now stops it.** An installer's stop used to look like a crash to macOS, so the app came straight back and a replacement could never finish. A stop now holds new work, lets what is running settle in up to 25 seconds, says what it did in one line, and exits cleanly — so macOS leaves it stopped. A real crash still restarts it.

@@ -66,10 +66,10 @@ class QwenImageModelTests(unittest.TestCase):
         model = generation.QWEN_IMAGE_21
         presets = generation.size_presets(model)
 
-        self.assertEqual(set(presets), {"16:9", "9:16", "1:1"})
+        self.assertEqual(set(presets), {"7:4", "16:9", "9:16", "1:1"})
         self.assertTrue(all(width * height <= 1024 * 1024
                             for width, height in presets.values()))
-        for ratio in ("16:9", "9:16", "1:1"):
+        for ratio in ("7:4", "16:9", "9:16", "1:1"):
             width, height = presets[ratio]
             accepted = generation.validate_request({
                 "repo": model.repo, "prompt": "a quiet temple at dawn",

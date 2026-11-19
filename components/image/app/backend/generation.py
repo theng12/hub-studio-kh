@@ -92,12 +92,16 @@ SIZE_PRESETS = {
     # an ADDITION, not a replacement -- the default stays 1280x720, because most image jobs
     # are standalone stills that never touch video.
     '16:9 small': (1024, 576),
+    # 1344x768 is 7:4, 1.6% narrower than 16:9: its own key and pixels, never relabelled 16:9.
+    '7:4': (1344, 768),
     '4:3': (1152, 864), '3:4': (864, 1152), '3:2': (1200, 800),
     '2:3': (800, 1200), '5:4': (1120, 896), '4:5': (896, 1120),
     '21:9': (1680, 720), '2:1': (1408, 704), '1:2': (704, 1408),
 }
 QWEN_SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
+    # 1344x768 is 7:4, 1.6% narrower than 16:9: its own key and pixels, never relabelled 16:9.
+    '7:4': (1344, 768),
 }
 # The two **mflux** Qwen rows (Low-RAM and Turbo, text lane and reference lane alike): mflux's
 # Qwen-Image-2.1 latent creator refuses any dimension that is not a positive multiple of 32
@@ -107,6 +111,8 @@ QWEN_SIZE_PRESETS = {
 # These are the same frames at engine-valid pixels — producer data, never a consumer's rule.
 QWEN_MFLUX_SIZE_PRESETS = {
     '16:9': (1024, 576), '9:16': (576, 1024), '1:1': (1024, 1024),
+    # 1344x768 is 7:4, 1.6% narrower than 16:9: its own key and pixels, never relabelled 16:9.
+    '7:4': (1344, 768),
 }
 TERMINAL = {'done', 'error', 'cancelled'}
 
@@ -1639,7 +1645,7 @@ def lane_parameters(model: ImageModel, total_memory_bytes: int | None = None) ->
          'max_characters': model.limits['max_prompt']},
         {'name': 'aspect_ratio', 'type': 'string', 'required': False,
          'enum': sorted(size_presets(model)), 'default': model.defaults['aspect_ratio'],
-         'note': 'width and height follow from the preset; a mismatched pair is refused'},
+         'note': 'a preset size, or explicit width/height that are positive multiples of 32'},
         {'name': 'resolution', 'type': 'string', 'required': False,
          'enum': ['1K'], 'default': '1K'},
         {'name': 'steps', 'type': 'integer', 'required': False,
@@ -1994,20 +2000,32 @@ def validate_request(raw: dict, data_dir=None, mode: str | None = None,
         raise ValueError(f'Prompt must contain 1–{model.limits["max_prompt"]} characters')
     presets = size_presets(model)
     ratio = raw.get('aspect_ratio')
+    dimensions = (raw.get('width'), raw.get('height'))
     if ratio is None:
-        dimensions = (raw.get('width'), raw.get('height'))
         if dimensions == (None, None):
             ratio = defaults['aspect_ratio']
         else:
             ratio = next((name for name, pixels in presets.items()
-                          if dimensions == pixels), None)
-    if ratio not in presets or raw.get('resolution', defaults['resolution']) != '1K':
+                          if dimensions == pixels), 'custom')
+    if ((ratio not in presets and ratio != 'custom')
+            or raw.get('resolution', defaults['resolution']) != '1K'):
         raise ValueError('Choose a qualified 1K aspect ratio')
-    width, height = presets[ratio]
-    if type(raw.get('width', width)) is not int or type(raw.get('height', height)) is not int:
-        raise ValueError('Width and height must be integer 1K preset pixels')
-    if (raw.get('width', width), raw.get('height', height)) != (width, height):
-        raise ValueError('Dimensions must match the selected 1K aspect ratio')
+    width, height = presets.get(ratio, dimensions)
+    if dimensions != (None, None):
+        matched = next((name for name, pixels in presets.items()
+                        if dimensions == pixels), None)
+        if matched is not None:
+            ratio = matched
+        else:
+            # The Gateway forwards both pixels verbatim: this is the trust boundary. An explicit
+            # custom canvas is admitted as given, never coerced to a preset, rounded, or guessed.
+            for name, value in zip(('Width', 'Height'), dimensions):
+                if type(value) is not int or value <= 0 or value % 32:
+                    raise ValueError(f'{name} {value} must be a positive multiple of 32')
+            ratio = 'custom'
+        width, height = dimensions
+    elif ratio == 'custom':
+        raise ValueError('Custom size needs both width and height')
     if model.dimension_multiple:
         # The engine's own bound, stated on the row: a preset that ever regressed to an
         # engine-invalid canvas is refused here, before a job is queued, naming the number —
@@ -2078,10 +2096,11 @@ def lane_contract(model: ImageModel, data_dir=None, total_memory_bytes: int | No
 
     Deliberately **not** listed: the parameters ``validate_request`` refuses outright
     (``image_path``, ``lora_names``, ``lora_paths``, ``negative_prompt``, ``quantize``) and
-    ``width``/``height``, which are derived from ``aspect_ratio`` and refused unless they match
-    the preset. A contract that offers a parameter the lane rejects is worse than one that omits
-    it. ``reference_images`` follows that rule in both directions: a model with a measured edit
-    lane publishes it (and accepts it), and one without publishes nothing (and refuses it).
+    ``width``/``height``, which are either the preset's pixels or an explicit pair that
+    ``validate_request`` admits only when both are positive multiples of 32. A contract that offers
+    a parameter the lane refuses is worse than one that omits it. ``reference_images`` follows the
+    same rule in both directions: a model with a measured edit lane publishes it (and accepts it),
+    and one without publishes nothing (and refuses it).
 
     ``references`` — a top-level block, beside ``parameters`` — is the same statement for the
     scheduler: the multipart field name, the count window, the reference image's pixel ceiling,
@@ -2817,7 +2836,8 @@ class GenerationManager:
                'created_at': time.time(), 'started_at': None,
                'finished_at': None, 'generated_at': None, 'duration_seconds': None,
                'output_path': None, 'output_url': None, 'sha256': None, 'bytes': None,
-               'width': None, 'height': None, 'steps': None, 'resolved_seed': None,
+               'width': None, 'height': None, 'render_width': None, 'render_height': None,
+               'crop': None, 'steps': None, 'resolved_seed': None,
                'media_type': None, 'error': None, 'error_code': None,
                'model_revision': params['model_revision'], 'runtime_revision': self.runtime_sha256,
                'memory_mode': None, 'loading_mode_setting': None, 'peak_mlx_bytes': None,
@@ -3168,10 +3188,22 @@ class GenerationManager:
                 expected = (job['params']['width'], job['params']['height'])
                 if dimensions != expected:
                     raise RuntimeError(f'Generated dimensions {dimensions} differ from requested {expected}')
+                # Only the new 7:4 row and operator-chosen pixels take the recorded 16:9 trim;
+                # every pre-existing preset keeps the exact canvas its row has always published.
+                crop = None
+                if job['params']['aspect_ratio'] in ('7:4', 'custom'):
+                    crop = centred_16x9_crop(dimensions)
+                if crop is not None:
+                    left, top = crop['offset']
+                    out_width, out_height = crop['output']
+                    with Image.open(staged) as image:
+                        image.crop((left, top, left + out_width, top + out_height)).save(
+                            staged, format='PNG')
+                    dimensions = (out_width, out_height)
                 content = staged.read_bytes()
                 if not content.startswith(b'\x89PNG\r\n\x1a\n'):
                     raise RuntimeError('Image engine PNG signature is invalid')
-                pending = (content, dimensions, peak)
+                pending = (content, dimensions, peak, crop)
             except Exception as exc:
                 self._record_failure(job, event, exc)
         # The inference lock is released: the model is gone and the next job may start while this
@@ -3222,7 +3254,8 @@ class GenerationManager:
             self._discard_inputs(job)
 
     def _deliver(self, job_id: str, job: dict, event: threading.Event, staged: Path,
-                 staged_jpeg: Path, content: bytes, dimensions: tuple, peak) -> None:
+                 staged_jpeg: Path, content: bytes, dimensions: tuple, peak,
+                 crop: dict | None = None) -> None:
         """Publish the finished image: the PNG as made, or the JPEG the job asked for.
 
         The PNG master is the hidden staged file and is never published when the JPEG is: it is
@@ -3263,8 +3296,9 @@ class GenerationManager:
                     output_url=f'/api/generate/jobs/{job_id}/image',
                     sha256=sha256(body).hexdigest(), bytes=len(body),
                     media_type=MEDIA_TYPE_BY_FORMAT[fmt], format=fmt, width=dimensions[0],
-                    height=dimensions[1], steps=job['params']['steps'],
-                    peak_mlx_bytes=peak,
+                    height=dimensions[1], render_width=job['params'].get('width'),
+                    render_height=job['params'].get('height'), crop=crop,
+                    steps=job['params']['steps'], peak_mlx_bytes=peak,
                     peak_process_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
                 if delivery is not None:
                     job['delivery'] = delivery
@@ -3285,6 +3319,22 @@ class GenerationManager:
                     pass
                 raise
             self._discard_inputs(job)
+
+
+def centred_16x9_crop(size: tuple[int, int]) -> dict | None:
+    """The centred, no-resampling 16:9 trim of an engine canvas, or None if already exact.
+
+    Recorded on the job rather than hidden: the caller can see the engine's pixels, the pixels it
+    received and the offset of the crop. Integer trim only — scaling would change the render.
+    """
+    width, height = size
+    units = min(width // 16, height // 9)
+    if units == 0 or (width == units * 16 and height == units * 9):
+        return None
+    output_width, output_height = units * 16, units * 9
+    left, top = (width - output_width) // 2, (height - output_height) // 2
+    return {'source': [width, height], 'output': [output_width, output_height],
+            'offset': [left, top]}
 
 
 def encode_jpeg(source: Path, destination: Path, *, expected_size: tuple) -> bytes:

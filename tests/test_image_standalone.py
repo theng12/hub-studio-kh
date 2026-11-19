@@ -720,9 +720,11 @@ class ImageStandaloneTests(unittest.TestCase):
             validate_request(self.request(guidance=float('inf')))
         with patch('components.image.app.backend.main._host_eligibility',
                    return_value={'eligible': True, 'macos': '26.6.2'}):
+            # 2048 is a legal custom width now (the owner's custom-size decision), so the invalid
+            # case is a dimension the engine cannot take: 2050 is not a multiple of 32.
             for changes in ({'repo': 'other/model'}, {'resolution': '2K'},
                             {'steps': 101},
-                            {'negative_prompt': 'blurry'}, {'width': 2048}):
+                            {'negative_prompt': 'blurry'}, {'width': 2050}):
                 response = self.client.post('/api/generate/txt2img', json=self.request(**changes),
                                             headers=self.headers)
                 self.assertEqual(response.status_code, 422, changes)
