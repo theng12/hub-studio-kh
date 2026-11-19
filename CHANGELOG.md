@@ -2,6 +2,22 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.254 — 2026-11-20
+
+- **A job that has gone quiet says so.** Until now a job could sit at "running" for hours with nothing wrong reported, because the attention report only knew about health checks and recent errors. A job silent past its own kind's limit — one hour for pictures, two hours for voice — now appears as needing attention, naming the job and how long it has been quiet. Nothing is cancelled; the job is only reported.
+- **An old answer stops reading as today's.** A Mac's row built from a cached snapshot now carries that snapshot's age and says "old snapshot, as of N minutes ago", and the startup check says "last checked N ago" or "not answering" instead of showing a stale green.
+- **The reason a Mac is waiting cannot outlive its attempt.** The sentence explaining why a Mac is busy is now dropped after twelve seconds or when a new run starts, so an orange reason from this morning cannot sit beside this afternoon's run.
+- **A slow render check gets the time it needs.** The encode probe waits for the Mac's own ten-minute limit plus a minute, instead of being cut off at one minute while the Mac was still working.
+- **A model a Mac does not have is called just that.** The Hub used to report "execution unready" for a model whose files were simply not on the Mac, and the Gateway's catalogue repeated that as if the Mac could not run it at all. The row now says the model is not installed, while a Mac that has it and cannot run it keeps the old reason.
+
+### Technical notes
+- `activity.stalled_attention_reason()` reports an active row past `automatic_recovery.stall_threshold_s` for its own modality (Image 3600 s, Voice 7200 s) through the existing `LAST_JOB_FAILED` code; report only, no state change. `standalone._recent_job_state()` returns `(state, detail)` and both `attention.refresh` call sites pass `activity_detail`, so `/api/hub/attention` carries the same sentence as the fleet row. Tests: `tests/test_stalled_row_attention_0254.py` (6).
+- A row built from `peers.cached` carries `snapshot_age_s`/`snapshot_note` (`standalone.py`), decoded onto `NativeFleetMachine.snapshotAgeS`/`snapshotNote` and surfaced by `NativeFleetRow.snapshotNote` only while the Mac has no current job; the startup verdict honours `fleet_nodes.py`'s existing `stale`/`observed_at`.
+- `broker.stamp_governor_note` writes the note with its time on every broker write; `broker.current_governor_note` drops a note older than `PEER_TTL_S` (12 s) or older than `run_started`.
+- `fleet_nodes._RENDER_RELAY_TIMEOUT_S = {"encode_probe_post": 660.0}`: the node's own 600 s probe wall plus the one-minute hop margin `TRANSCRIBE_RELAY_TIMEOUT` already uses; every other operation keeps its 60 s ceiling, unlisted operations documented to keep it. Tests: `tests/test_render_relay_ceiling_0254.py` (3).
+- Two stale assertions in `tests/test_peer_path_contract.py` were corrected, not the behaviour: the services banner owns the "local services stopped" case and `audioBlockedReason` returns nil for it.
+- `capabilities._model_capability()`: an `execution_ready: false` row whose `hub_cached` is `false` now reports `model_not_installed` instead of `worker_execution_unready`; an installed model with an unready execution keeps `worker_execution_unready`. This is the reason Mac 1100 gave while publishing `memory_eligible: true` for `qwen3-5-9b-4bit` — the memory read was true; the reason was not. Tests: `tests/test_not_installed_reason_0254.py` (2).
+
 ## 0.6.252 — 2026-11-19
 
 - **One more size, and you can type your own.** Both image models now offer **1024×576** (unchanged default) and **1344×768**, a wider picture that suits 7:4 frames. You can also give a width and height yourself; the app accepts them only when both are multiples of 32, and says which number is wrong when they are not — it never quietly rounds or picks a different size for you.
