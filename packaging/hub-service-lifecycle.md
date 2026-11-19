@@ -38,3 +38,16 @@ loopback pid health reply; it never references the real Hub label. Its log,
 `state = SIGTERMed`, `Could not find service`, `pid` and `last exit code` strings, the invalid-plist
 bootstrap failure and the recovery. Its trap boots the temp label out and removes the temp
 directory on success, failure, INT and TERM.
+
+## Two login items, not one (fleet-measured, 2026-11-19)
+
+49 of 52 reachable Macs run an **app-type** login item (`SMAppService`) *alongside* the plain agent
+`kh.studiohub.standalone`. The app-type item **records the code requirement at registration**, so a
+re-signed build can be refused there until it is reloaded — `needs LWCR update` / `spawn failed` is
+the expected outcome, not a stray fault. Booting out the agent alone leaves the app-type item holding
+a stale requirement, and the app can end up installed and not running.
+
+An installer replacing the bundle therefore runs this contract **twice** — once for the agent label
+(`kh.studiohub.standalone`) and once for each app-type label it finds under
+`launchctl print gui/$(id -u) | grep application.local.studiohub.standalone` — stopping both before
+the swap and starting both after it, then verifying the health pid against the agent's pid.
