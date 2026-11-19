@@ -516,7 +516,7 @@ def _required_free_memory_gb(model_entry, *, loaded: bool) -> float:
     **Measured, 2026-10-19.** VoxCPM2 4-bit: row 2.8 GB (owner's choice for headroom; the real
     8 GB M1+M2 runs started cleanly from 3.25 GB free), formula **3.55**. The Hub therefore
     admitted an 8 GB Mac this preflight then refused — live as *"needs about 3.5 GB free and has
-    about 3.4 GB free"* on `studio-mac-0107-m2-8-256-hub` and `studio-mac-1401-m2-8-256-hub`, job
+    about 3.4 GB free"* on `fleet-mac-0107-m2-8-256-hub` and `fleet-mac-1401-m2-8-256-hub`, job
     `97bdce60` (126 attempts, 3,068 `INSUFFICIENT_MEMORY` hand-backs in `gateway-kh.log.1`), on
     Macs the row's own measurement says are fine.
 

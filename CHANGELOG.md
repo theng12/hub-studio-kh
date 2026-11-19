@@ -2,6 +2,16 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.249 — 2026-11-19
+
+- **The app no longer names this estate.** A machine-naming scheme that included the estate's name had leaked into the app's own documents and audit records — a fleet name is personal even with no address behind it. Every occurrence is gone: the downloaded app names nobody and no site.
+
+### Technical notes
+- Scrubbed from every file the app ships: `components/voice/audit_contract_runtime.py` (the audit anchor's `canary_target`), the five `components/voice/model-audits/*.audit.json` records, three comments in `components/hub/backend/broker.py`, one in `components/voice/app/backend/generation.py`, two lines in each changelog, and one comment in `native/StudioAPI.swift`.
+- The fleet-name parser is generalised rather than renamed: `generated_hub_hostname()` reads `<machine_prefix>-<host>-<id8>-hub` and returns whatever sits between the profile's own prefix and the generated id, so no estate or fleet name appears in the pattern and a renamed Mac or a new site needs no code change.
+- The v1 audit record's byte pin moved once, deliberately, with a comment saying why: the record changed (its canary target was a host name), and it is frozen again from this release so a later edit still cannot slip into a measured record.
+- Tests: `components/voice/app/tests/test_model_audit_contract.py` (26) green, including the moved pin.
+
 ## 0.6.248 — 2026-11-19
 
 - **The download no longer carries anyone’s name.** One file inside the music engine, and the engine’s own library, recorded the folder they were built in — the builder’s home folder, a person’s name in every copy. Both are gone: the downloaded app names nobody and no machine. Nothing else about the music engine changed.
@@ -1712,7 +1722,7 @@ Before a song starts, the other Studios on that Mac put away the models they are
 
 ### Technical notes
 
-- Measured 2026-10-12 after 0.6.168: YuE2 loaded on 16 GB Macs (studio-mac-1103-m2-16, studio-mac-1201-m2-16) and then failed 150–180 s into the song with `System memory pressure is not normal (level=2)` — the port's own guard (`lyra/measure.py`: pressure must stay 1, ≥ 2 GiB available, no new swap). The 24 GB studio-mac-1300 sang (60 s song, 230 s). On This Mac, releasing idle Studios before each song gave zero failures.
+- Measured 2026-10-12 after 0.6.168: YuE2 loaded on 16 GB Macs (fleet-mac-1103-m2-16, fleet-mac-1201-m2-16) and then failed 150–180 s into the song with `System memory pressure is not normal (level=2)` — the port's own guard (`lyra/measure.py`: pressure must stay 1, ≥ 2 GiB available, no new swap). The 24 GB fleet-mac-1300 sang (60 s song, 230 s). On This Mac, releasing idle Studios before each song gave zero failures.
 - `broker.CLEAR_MACHINE_MODELS` (`vanch007/mlx-Yue2-3B`): `prepare_machine_memory` asks every idle Studio on the target Mac to release its models before a YuE2 job, not only when free memory is short. A busy Studio is never preempted; the job waits its turn (`wait`), as one generation per Mac already makes it.
 - `yue2_runner.wait_for_normal_pressure`: before loading, the bridge waits up to 120 s for `kern.memorystatus_vm_pressure_level` to read normal (unknown never blocks). The port's guard is unchanged.
 - Tests: `tests/test_yue2_clear_machine.py`.
@@ -1781,7 +1791,7 @@ If a Mac produces an empty or broken narration file, the job now tries again, on
 
 ### Technical notes
 
-- On 10-09 at 08:04 a narration job on studio-mac-1504 (Hub batch `ebcfd92c1a`) produced an empty (0-byte) m4a. The Hub noticed the file could not be checked, but still marked the job finished, following the rule "never retry a completed generation", and handed out the empty file with no size or checksum.
+- On 10-09 at 08:04 a narration job on fleet-mac-1504 (Hub batch `ebcfd92c1a`) produced an empty (0-byte) m4a. The Hub noticed the file could not be checked, but still marked the job finished, following the rule "never retry a completed generation", and handed out the empty file with no size or checksum.
 - Now an empty file, or one no player could open, is a failed try and not a finished job. The job then retries and moves to another Mac like any other failure. The error code says which: `EMPTY_OUTPUT` for an empty file, `INVALID_OUTPUT` for one that cannot be opened. That covers an m4a with no `moov` box or cut off partway, a WAV with no audio or cut off, and bytes that are not the type the Mac said it sent (for example an HTML error page).
 - A file that plays but whose extra check could not finish still counts as finished, exactly as before. Examples are a size or checksum that differs from what the Mac reported, or a Mac that did not report the duration. It is still marked unchecked and not billed.
 - Every finished narration file now comes with its size and SHA-256, including the unchecked ones. The Hub uses the bytes it downloaded. When the download could not run, it uses the size and checksum the Mac reported. Before, only the unchecked files were missing these, so the Hub served them with no `Content-Length` and no `X-Content-SHA256`.
@@ -2094,7 +2104,7 @@ peak swap growth. Missing measurements cannot count as a pass.
 
 ### Technical notes
 
-Branch `fix/restart-lost-free-work` off 0.6.148 a7fd296. On 2026-10-05 22:14:56 the Terranash-1600 controller's Hub process restarted
+Branch `fix/restart-lost-free-work` off 0.6.148 a7fd296. On 2026-10-05 22:14:56 the fleet-mac-1600 controller's Hub process restarted
 (the app itself did not stop, so `last_stop` stayed at its 18:33 update). `restore_batches` fenced its five running Z-Image items
 `uncertain` although their nodes had finished all five (22:12:56-22:15:42): the Gateway parked the jobs as "Needs recovery"
 (UNKNOWN_OUTCOME) and `busy_machines()` held those five idle Macs until the 30-minute uncertain sweep, while new work queued.

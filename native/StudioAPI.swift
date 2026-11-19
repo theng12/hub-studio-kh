@@ -9095,7 +9095,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// The name of a machine in this controller's roster, for a result that must name Macs rather
     /// than ids. Falls back to the id the Hub used, which is still a value the operator can match.
     /// The label a person set for a machine, for anything that would otherwise print its id. The id
-    /// is an internal key (a Mac renamed to studio-mac-1501 keeps the id it first registered with),
+    /// is an internal key (a Mac renamed to fleet-mac-1501 keeps the id it first registered with),
     /// so it is only the last resort — views put it in a tooltip.
     func fleetMachineName(_ machine: String) -> String {
         let key = machine.lowercased()

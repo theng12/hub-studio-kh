@@ -500,7 +500,7 @@ MAX_TRIES = 3
 #: the bound it fails retryable with the reason — never sits at `running` with a sentence under it).
 #: This is the wait that used to have no clock at all: a machine reservation another queue holds
 #: restores the item's tries on every refusal, so the MAX_TRIES ladder could not end it, and eleven
-#: jobs sat 137 minutes on studio-mac-1200 (2026-11-18). A wait parked on a scheduled retry is **not**
+#: jobs sat 137 minutes on fleet-mac-1200 (2026-11-18). A wait parked on a scheduled retry is **not**
 #: counted — that ladder has its own tries. Adjustable, and the failure sentence names the number.
 QUEUE_WAIT_CEILING_S = float(os.environ.get("STUDIOHUB_QUEUE_CEILING_S") or 45 * 60)
 MAX_INFRA_TRIES = 8
@@ -1806,7 +1806,7 @@ def _load_model_protection() -> None:
         pass
     # A pause recorded under an older classifier is re-read with today's: one whose evidence no
     # longer counts against the model (2026-10-04: a "***" section made Qwen 0.6B write no audio,
-    # and three such jobs paused it on studio-mac-1305 and -1408) is lifted, and said so. A real
+    # and three such jobs paused it on fleet-mac-1305 and -1408) is lifted, and said so. A real
     # engine or model-file failure still counts, so its pause stays.
     lifted = [key for key, row in _model_protection.items()
               if row.get("blocked") and not _counts_against_model(
@@ -4266,7 +4266,7 @@ async def _cache_voice_artifact_metadata(client: httpx.AsyncClient, item: dict,
     the size and SHA-256 it is served with (`_keep_served_digest`), so a client can check it.
 
     An empty or unplayable file is not a completed generation (orchestrator, 2026-10-09, after a
-    0-byte m4a from studio-mac-1504 was published ``done``): it raises
+    0-byte m4a from fleet-mac-1504 was published ``done``): it raises
     `artifact_metadata.UnusableArtifact`, which `_record_worker_success` turns into a failed,
     retryable attempt (``EMPTY_OUTPUT`` / ``INVALID_OUTPUT``).
 

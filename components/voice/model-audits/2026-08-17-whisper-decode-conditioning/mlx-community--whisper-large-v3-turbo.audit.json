@@ -495,7 +495,7 @@
   "results_per_chapter": [
    {
     "chapter": "TN0154_Chapter_03",
-    "project": "studio-mac-sleep-stories",
+    "project": "fleet-mac-sleep-stories",
     "content_kind": "affected",
     "truth_words": 383,
     "base": {
@@ -529,7 +529,7 @@
    },
    {
     "chapter": "TN0145_Chapter_01",
-    "project": "studio-mac-sleep-stories",
+    "project": "fleet-mac-sleep-stories",
     "content_kind": "affected",
     "truth_words": 492,
     "base": {
@@ -563,7 +563,7 @@
    },
    {
     "chapter": "TN0153_Chapter_05",
-    "project": "studio-mac-sleep-stories",
+    "project": "fleet-mac-sleep-stories",
     "content_kind": "clean",
     "truth_words": 814,
     "base": {

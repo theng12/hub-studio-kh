@@ -417,9 +417,9 @@
       "primary_weight": "model.safetensors",
       "local_source": "cache/HF_HOME/hub/models--mlx-community--OmniVoice-bfloat16",
       "sites_cached": [
-        "studio-mac-pps",
-        "studio-mac-kts",
-        "studio-mac-tsh"
+        "fleet-mac-pps",
+        "fleet-mac-kts",
+        "fleet-mac-tsh"
       ],
       "sites_cached_provenance": "carried over from the superseded record; not re-verified by this session, which contacted no fleet machine"
     },
@@ -528,7 +528,7 @@
         "real_time_factor": 1.73
       },
       "wave2_8_gb_clone": {
-        "machine": "studio-mac-0206",
+        "machine": "fleet-mac-0206",
         "peak_memory_gb": 3.68,
         "real_time_factor": 3.26,
         "minimum_free_gb": 0.71,

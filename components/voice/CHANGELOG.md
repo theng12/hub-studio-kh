@@ -827,7 +827,7 @@ Studio; a generation-stack reinstall is not required.
   for pathological worktrees. Paths are repo-relative filenames only — no file
   content or diffs — so nothing sensitive leaks through the API. Mirrors
   Studio Hub v1.45.0's fix for the same blind spot; without it, a stuck
-  machine like `studio-mac-0103` (wedged on v1.32.1) could not be diagnosed
+  machine like `fleet-mac-0103` (wedged on v1.32.1) could not be diagnosed
   through the fleet API at all, since there is no SSH or remote-exec channel.
 - The refusal behavior itself is unchanged — dirty trees are still refused.
   This only adds diagnostic detail to the message.
@@ -1119,7 +1119,7 @@ Studio; a generation-stack reinstall is not required.
   Mac) at **1.73x** real time, against Audio8's 8.61 GB at 1.79x — comparable
   speed for roughly a third of the memory.
 - Wave-2 qualification (2026-08-03) had already completed an OmniVoice clone on
-  an **8 GB** machine (`studio-mac-0206`, 3.68 GB peak, RTF 3.26) — but it
+  an **8 GB** machine (`fleet-mac-0206`, 3.68 GB peak, RTF 3.26) — but it
   reached `urgent` pressure with 0.71 GB free and added 0.76 GB swap, and that
   review concluded the production floor should stay at 16 GB. That conclusion
   is unchanged; the catalogue's 8 GB floor for OmniVoice reflects that it

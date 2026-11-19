@@ -213,7 +213,7 @@
     "qualified_runtime": {
       "voice_studio_version": "2.1.2",
       "commit": "433fccebf08583aa8a61e88fc8804541ec61818b",
-      "target": "studio-mac-0201",
+      "target": "fleet-mac-0201",
       "hardware": "Apple M2, 17.18 GB unified memory",
       "checkpoint_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
       "cache": {"complete_bytes": 3104164936, "incomplete_bytes": 0}

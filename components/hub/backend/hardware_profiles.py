@@ -196,13 +196,17 @@ def hardware_profile(profile_id: str | None) -> dict | None:
     )
 
 
-def generated_terranash_hostname(machine: str, profile: dict | None) -> str | None:
-    """Recover an unambiguous TerraNash hostname from a generated Hub ID."""
+def generated_hub_hostname(machine: str, profile: dict | None) -> str | None:
+    """Recover the host name from a generated Hub ID: ``<machine_prefix>-<host>-<id8>-hub``.
+
+    The host part is whatever sits between the profile's own prefix and the generated id, so the
+    parser names no estate and no fleet: a new site or a renamed Mac needs no code change here.
+    """
     prefix = str((profile or {}).get("machine_prefix") or "").strip()
     if not prefix:
         return None
     match = re.fullmatch(
-        rf"{re.escape(prefix)}-(studio-mac-[a-z0-9-]+)-[0-9a-f]{{8}}-hub",
+        rf"{re.escape(prefix)}-(.+)-[0-9a-f]{{8}}-hub",
         str(machine),
     )
     return match.group(1) if match else None

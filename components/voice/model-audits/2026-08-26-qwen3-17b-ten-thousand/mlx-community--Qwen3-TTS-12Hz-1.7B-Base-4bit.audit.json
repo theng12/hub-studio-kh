@@ -252,7 +252,7 @@
       "checkpoint_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
       "commit": "433fccebf08583aa8a61e88fc8804541ec61818b",
       "hardware": "Apple M2, 17.18 GB unified memory",
-      "target": "studio-mac-0201",
+      "target": "fleet-mac-0201",
       "voice_studio_version": "2.1.2"
     },
     "rejected_boundaries": {
@@ -322,7 +322,7 @@
         ],
         "random_baseline_percent": 0.51
       },
-      "target": "studio-mac-0202",
+      "target": "fleet-mac-0202",
       "transcriber_determinism_baseline": "Re-transcribing identical audio returned byte-identical text, so the residual variation is the model's, not the transcriber's.",
       "validator": {
         "branch": "edit_distance",

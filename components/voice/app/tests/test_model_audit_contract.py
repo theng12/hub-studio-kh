@@ -232,8 +232,11 @@ def test_qwen_v1_is_byte_stable_and_v3_is_the_runtime_source() -> None:
     newer.
     """
 
+    # The pin moved once, on purpose, in 0.6.249: the v1 record's canary target was a fleet host
+    # name and 0.6.249 scrubs fleet names from everything the app ships. Its bytes are frozen again
+    # from here — this hash is what stops a later edit slipping into a measured record.
     assert hashlib.sha256(QWEN_17B_V1.read_bytes()).hexdigest() == (
-        "b45e061379df0d8ee9e2d8dc0754108b280db5293f9c2fe7d5b4cab2a5b74e76"
+        "ad92bd292f9f51f665a180a39bfa1fb75216ba786dde9b5d3ecf9967b575799a"
     )
     record = model_audits.audit_record(QWEN_17B_BASE)
     assert record is not None
@@ -413,7 +416,7 @@ def test_qwen_17b_passed_production_audit_is_latest_and_drives_catalog_limits() 
     assert evidence["qualified_runtime"] == {
         "voice_studio_version": "2.1.2",
         "commit": "433fccebf08583aa8a61e88fc8804541ec61818b",
-        "target": "studio-mac-0201",
+        "target": "fleet-mac-0201",
         "hardware": "Apple M2, 17.18 GB unified memory",
         "checkpoint_revision": "e7dd0585652209fa0d7783659aad4e8a324de11c",
         "cache": {"complete_bytes": 3104164936, "incomplete_bytes": 0},
