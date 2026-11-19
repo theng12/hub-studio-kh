@@ -63,6 +63,16 @@ class SizePresetTests(unittest.TestCase):
             self.assertEqual(size_presets(model)['7:4'], (1344, 768), model.repo)
         self.assertEqual(SIZE_PRESETS['16:9'], (1280, 720))
 
+    def test_both_sizes_the_owner_named_are_published_by_every_image_model(self):
+        """Owner, 2026-11-19: "add both for both models". Both = 1024x576 and 1344x768, and both
+        models = every image model family, not only the two rows that share `SIZE_PRESETS`."""
+        for model in MODELS.values():
+            presets = size_presets(model)
+            self.assertIn((1024, 576), presets.values(), model.repo)
+            self.assertEqual(presets['7:4'], (1344, 768), model.repo)
+            keys = list(presets)
+            self.assertEqual(len(keys), len(set(keys)), model.repo)
+
     def test_the_existing_small_defaults_are_unchanged(self):
         self.assertEqual(SIZE_PRESETS['16:9 small'], (1024, 576))
         self.assertEqual(QWEN_MFLUX_SIZE_PRESETS['16:9'], (1024, 576))

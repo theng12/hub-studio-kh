@@ -100,6 +100,11 @@ SIZE_PRESETS = {
 }
 QWEN_SIZE_PRESETS = {
     '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (1024, 1024),
+    # 1024x576 is exactly 16:9 as well, so it cannot reuse the '16:9' key (one row per key). The
+    # owner asked for this video-valid frame on **every** image model, not only on the ones whose
+    # 16:9 already happens to be 1024x576. 1024 and 576 are both multiples of 32, so mflux's own
+    # rule does not block it on any engine.
+    '16:9 small': (1024, 576),
     # 1344x768 is 7:4, 1.6% narrower than 16:9: its own key and pixels, never relabelled 16:9.
     '7:4': (1344, 768),
 }
