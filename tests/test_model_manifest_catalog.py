@@ -485,7 +485,10 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # ST-16: captured 2026-09-24 from the pinned revision. 15 model-data files,
             # 5,907,438,792 bytes; the publisher's dotfiles, README and three example
             # images are excluded, so this total is not the 5,911,138,787-byte snapshot.
-            "z-image-turbo-mflux-4bit": "07164342f7eeb72ad97466b8a1b2c3af1429b3f170271e238804eb4cdd5f4738",
+            # Digest moved 2026-11-20, deliberately: `memory_evidence` dropped the hardware model id
+            # `Macmini9,1` from the 8 GB run's description (a strict artifact scan stopped on it).
+            # Every number, tier and status is unchanged; the pinned files are untouched.
+            "z-image-turbo-mflux-4bit": "a0214dd88b93707243a079fa73501880e1160901edba0bf75cbae7aeefe6436c",
             # Recaptured 2026-09-25: the qualification is now a MEASUREMENT rather than
             # catalog arithmetic. Three 16 GB Macs (M1, M2, M4) each completed a 256-token
             # completion at 12.40-18.60 tok/s with peak MLX 5.23 GB, so `status` moves from

@@ -7,8 +7,8 @@ foundation for federation and Swarm Batch worker pools.
 
 studios.json format (all fields optional except id for overrides):
 [
-  { "id": "image", "host": "100.101.102.103", "machine": "studio-2" },
-  { "id": "image-b", "modality": "image", "host": "100.101.102.103", "port": 47868,
+  { "id": "image", "host": "192.0.2.10", "machine": "studio-2" },
+  { "id": "image-b", "modality": "image", "host": "192.0.2.10", "port": 47868,
     "machine": "studio-2", "title": "Image Studio (M2 Ultra)" }
 ]
 """

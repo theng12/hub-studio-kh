@@ -3649,8 +3649,8 @@ def batch_summary(b: dict) -> dict:
         elapsed = round(now - started, 1) if started else None
         running_items.append({
             "index": i.get("index"),
-            "studio": sid,                 # e.g. "image@macmini-m1-01" or "image"
-            "machine": machine,            # "macmini-m1-01" or "local"
+            "studio": sid,                 # e.g. "image@studio-a" or "image"
+            "machine": machine,            # "studio-a" or "local"
             "progress": i.get("progress"),  # 0..1 or None
             "chunk_index": i.get("chunk_index"),
             "chunk_total": i.get("chunk_total"),

@@ -8,6 +8,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 - **An old answer stops reading as today's.** A Mac's row built from a cached snapshot now carries that snapshot's age and says "old snapshot, as of N minutes ago", and the startup check says "last checked N ago" or "not answering" instead of showing a stale green.
 - **The reason a Mac is waiting cannot outlive its attempt.** The sentence explaining why a Mac is busy is now dropped after twelve seconds or when a new run starts, so an orange reason from this morning cannot sit beside this afternoon's run.
 - **A slow render check gets the time it needs.** The encode probe waits for the Mac's own ten-minute limit plus a minute, instead of being cut off at one minute while the Mac was still working.
+- **The app's own notes name none of our machines.** The address examples in the controller field, one registry example and two measurement notes carried a real-looking address or a machine's hardware id. They now read the same way without one: a name example instead of an address, a documentation address in the registry block, and "Apple M1 Mac mini" where a hardware id was recorded. No measurement or rule changed.
 - **A model a Mac does not have is called just that.** The Hub used to report "execution unready" for a model whose files were simply not on the Mac, and the Gateway's catalogue repeated that as if the Mac could not run it at all. The row now says the model is not installed, while a Mac that has it and cannot run it keeps the old reason.
 
 ### Technical notes
@@ -16,6 +17,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 - `broker.stamp_governor_note` writes the note with its time on every broker write; `broker.current_governor_note` drops a note older than `PEER_TTL_S` (12 s) or older than `run_started`.
 - `fleet_nodes._RENDER_RELAY_TIMEOUT_S = {"encode_probe_post": 660.0}`: the node's own 600 s probe wall plus the one-minute hop margin `TRANSCRIBE_RELAY_TIMEOUT` already uses; every other operation keeps its 60 s ceiling, unlisted operations documented to keep it. Tests: `tests/test_render_relay_ceiling_0254.py` (3).
 - Two stale assertions in `tests/test_peer_path_contract.py` were corrected, not the behaviour: the services banner owns the "local services stopped" case and `audioBlockedReason` returns nil for it.
+- Scan scrub (the strict `scan-dmg.sh` run over the published 0.253 DMG reported six lines it stops on): `broker.py`'s example studio names are `studio-a`, `registry.py`'s doc example is `192.0.2.10` (TEST-NET-1), `generation.py:137` and `model-manifests/z-image-turbo-mflux-4bit.json` say "Apple M1 Mac mini" where they recorded `Macmini9,1`, the controller field's help text and its two comments use a `mac.tailnet.ts.net` name example, and the changelog's own port note drops its address literal. No measurement, rule or number changed.
 - `capabilities._model_capability()`: an `execution_ready: false` row whose `hub_cached` is `false` now reports `model_not_installed` instead of `worker_execution_unready`; an installed model with an unready execution keeps `worker_execution_unready`. This is the reason Mac 1100 gave while publishing `memory_eligible: true` for `qwen3-5-9b-4bit` — the memory read was true; the reason was not. Tests: `tests/test_not_installed_reason_0254.py` (2).
 
 ## 0.6.252 — 2026-11-19
@@ -6587,8 +6589,8 @@ a terminal one, and never for a studio with no receipt at all. **It does not kil
 merely-quiet job would lose work the long deadline exists to protect. This is the piece that makes a
 30-minute ceiling safe rather than just long.
 
-**Z-Image-Turbo 6B MLX 4-bit is qualified on 8 GB.** The owner ran it on an **Apple M1 Mac mini
-(`Macmini9,1`), 8.0 GB, macOS 26.6.2** with **mflux 0.20.0**: low-RAM completed 1024x1024 in 392 s
+**Z-Image-Turbo 6B MLX 4-bit is qualified on 8 GB.** The owner ran it on an **Apple M1 Mac mini,
+8.0 GB, macOS 26.6.2** with **mflux 0.20.0**: low-RAM completed 1024x1024 in 392 s
 and 1280x720 in 336 s, 5.70 GB peak MLX and 5.85 GB footprint. The manifest's floor moved **16 → 8**
 and its status **unqualified → qualified** — through `capture_model_manifests.py`, its producer,
 not by hand. **The engine default also completed on that Mac, and that must not be read as licence to
@@ -8462,7 +8464,7 @@ looking the name up, rather than by requiring you to type numbers.
 
 ### Technical notes
 
-- **The port is optional.** The Hub's port is fixed, so `100.64.0.5` is now a complete
+- **The port is optional.** The Hub's port is fixed, so an address on its own is now a complete
   answer and 47873 is assumed. It used to demand `host:port` and refuse the address alone.
 - **A name is accepted**, which is what a tailnet actually gives you:
   `mac.tailnet.ts.net` or `mac-mini.local` now work, with or without a port and with or

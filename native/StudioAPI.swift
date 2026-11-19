@@ -9167,7 +9167,7 @@ final class NativeWorkspaceStore: ObservableObject {
     /// keeps this Mac from being talked into sending its credential somewhere unchecked.
     /// Turn what a person types into the controller's URL.
     ///
-    /// Accepts `100.64.0.5:47873`, `100.64.0.5` on its own (the Hub's port is fixed, so the
+    /// Accepts an address with a port, an address on its own (the Hub's port is fixed, so the
     /// port is assumed), an `http://` prefix, and a name such as
     /// `mac.tailnet.ts.net:47873`. A name is allowed because MagicDNS is the natural thing
     /// to type on a tailnet; what is refused is an address that is not private - the check
@@ -9193,7 +9193,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw NativeAPIError.message(
-                "Enter your controller's address, for example 100.64.0.5:47873.")
+                "Enter your controller's address, for example mac.tailnet.ts.net:47873.")
         }
         let candidate = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
         guard let components = URLComponents(string: candidate),
@@ -9203,7 +9203,7 @@ final class NativeWorkspaceStore: ObservableObject {
               components.query == nil, components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
             throw NativeAPIError.message(
-                "Enter an address like 100.64.0.5:47873 - just the address and the port.")
+                "Enter an address like mac.tailnet.ts.net:47873 - just the address and the port.")
         }
         // The Hub's port is fixed rather than picked per start, so an address on its own is a
         // complete answer and the operator should not have to know the number.
@@ -10772,8 +10772,8 @@ final class NativeWorkspaceStore: ObservableObject {
             note(.failure, "Type the controller's address first, then test it.")
             return
         }
-        // Name the address actually tried, not the raw text: a bare "100.64.0.5" becomes
-        // http://100.64.0.5:47873, and an error that echoes only the typing hides that (owner
+        // Name the address actually tried, not the raw text: a bare name becomes
+        // http://name:47873, and an error that echoes only the typing hides that (owner
         // rule, 2026-11-13: connection fields take what the owner types).
         let target: URL
         do { target = try Self.privateHTTPAddress(trimmed) }
