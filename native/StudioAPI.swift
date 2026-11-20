@@ -9193,7 +9193,7 @@ final class NativeWorkspaceStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw NativeAPIError.message(
-                "Enter your controller's address, for example mac.tailnet.ts.net:47873.")
+                "Enter your controller's address: its Tailscale name and the Hub's port.")
         }
         let candidate = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
         guard let components = URLComponents(string: candidate),
@@ -9203,7 +9203,7 @@ final class NativeWorkspaceStore: ObservableObject {
               components.query == nil, components.fragment == nil,
               components.path.isEmpty || components.path == "/" else {
             throw NativeAPIError.message(
-                "Enter an address like mac.tailnet.ts.net:47873 - just the address and the port.")
+                "Enter an address like the Mac's Tailscale name and the Hub's port - just the address and the port.")
         }
         // The Hub's port is fixed rather than picked per start, so an address on its own is a
         // complete answer and the operator should not have to know the number.
