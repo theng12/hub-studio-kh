@@ -944,7 +944,10 @@ final class StudioController: ObservableObject {
     /// mechanism left. It never touches the launch agent, and it never fails startup: a Mac that
     /// cannot remove the old entry still runs and is told how to remove it by hand.
     func migrateLegacyLoginItemIfNeeded() {
-        guard !configuration.loginMigrationComplete else { return }
+        guard !configuration.loginMigrationComplete else {
+            print("LOGIN_MIGRATION skipped=already-recorded")
+            return
+        }
         let outcome = LoginMigration.run(alreadyRecorded: configuration.loginMigrationComplete,
                                          oldStatus: legacyLoginItemStatus,
                                          unregister: legacyLoginItemUnregister)
@@ -954,6 +957,16 @@ final class StudioController: ObservableObject {
         if LoginMigration.recordsCompletion(outcome) {
             configuration.loginMigrationComplete = true
             do { try configuration.save() } catch { /* not startup-critical; retried next launch */ }
+        }
+        // **Say the decision.** This path removes a login registration once per Mac and said nothing
+        // on success, so a Mac that started behaving differently at login had no line to point at
+        // (Gateway's silent unregister was the same shape, 2026-11-20). One line, the outcome, no
+        // secret: the detail on failure is the same sentence the window shows.
+        switch outcome {
+        case .alreadyDone:     break   // unreachable: the guard above returns first
+        case .nothingToRemove: print("LOGIN_MIGRATION cleared=nothing-to-remove")
+        case .removed:         print("LOGIN_MIGRATION cleared=legacy-mainapp-item")
+        case .failed(let detail): print("LOGIN_MIGRATION failed=\(detail)")
         }
         if let notice = LoginMigration.notice(for: outcome) { failure = notice }
     }
