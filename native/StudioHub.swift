@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import os
 #if canImport(ServiceManagement)
 // Imported only for the one-time migration off the old login item; no other code may touch it.
 import ServiceManagement
@@ -7,6 +8,13 @@ import ServiceManagement
 import Carbon
 import Combine
 import Darwin
+
+/// Startup decisions go to the unified log, not stdout. The launch agent's property list sets no
+/// `StandardOutPath`, so launchd discards the stdout of the very login launch these lines exist to
+/// explain; a `print` there is a line nobody can read back (V003, 2026-11-20). The unified log is
+/// rotated by the system, so there is no file to bound.
+///   log show --last 5m --predicate 'subsystem == "kh.studiohub"'
+private let startupLog = Logger(subsystem: "kh.studiohub", category: "startup")
 
 /// The real old-registration reader, in one place. Kept behind injected closures on the
 /// controller so the migration decision is testable without linking ServiceManagement.
@@ -945,7 +953,7 @@ final class StudioController: ObservableObject {
     /// cannot remove the old entry still runs and is told how to remove it by hand.
     func migrateLegacyLoginItemIfNeeded() {
         guard !configuration.loginMigrationComplete else {
-            print("LOGIN_MIGRATION skipped=already-recorded")
+            startupLog.notice("LOGIN_MIGRATION skipped=already-recorded")
             return
         }
         let outcome = LoginMigration.run(alreadyRecorded: configuration.loginMigrationComplete,
@@ -964,9 +972,9 @@ final class StudioController: ObservableObject {
         // secret: the detail on failure is the same sentence the window shows.
         switch outcome {
         case .alreadyDone:     break   // unreachable: the guard above returns first
-        case .nothingToRemove: print("LOGIN_MIGRATION cleared=nothing-to-remove")
-        case .removed:         print("LOGIN_MIGRATION cleared=legacy-mainapp-item")
-        case .failed(let detail): print("LOGIN_MIGRATION failed=\(detail)")
+        case .nothingToRemove: startupLog.notice("LOGIN_MIGRATION cleared=nothing-to-remove")
+        case .removed:         startupLog.notice("LOGIN_MIGRATION cleared=legacy-mainapp-item")
+        case .failed(let detail): startupLog.error("LOGIN_MIGRATION failed=\(detail, privacy: .public)")
         }
         if let notice = LoginMigration.notice(for: outcome) { failure = notice }
     }
