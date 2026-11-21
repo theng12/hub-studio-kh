@@ -515,19 +515,80 @@ try Data("{\"modelsPath\":\"\(legacyRoot.path)/models\",\"offline\":false,\"star
 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesURL.path)
 let legacy = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", legacyRoot.path],
                                     bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
-// This used to require `127.0.0.1` — "an older preference file must default to loopback" — and
-// that default is what the owner asked to change: *"i keep forgetting to turn on tailscale. i
-// want it already the default on."* A Mac whose addresses were frozen on the day it was set up
-// never reaches its tailnet, and the operator's only clue is a Connections screen he has to
-// remember to open.
-//
-// An absent flag now means automatic, and automatic is additive over the saved list. The
-// expectation is written as the rule rather than as a literal, because what this Mac's addresses
-// are depends on the Mac running the test.
+// A file with no role in it is a Mac that has never picked one, and such a Mac answers itself
+// only (owner, 2026-11-21: *"loopback-only until a role is picked"*). This replaces the earlier
+// "follow this Mac's networks from the first launch" default: opening the LAN and tailnet is the
+// act of picking a role or joining a group, not something a Mac with no group infers.
 require(legacy.listenHostAutomatic, "an absent preference must mean automatic, not pinned")
-require(legacy.listenHost == ShellConfiguration.automaticListenHost(keeping: "127.0.0.1"),
-        "an older preference file must follow this Mac's networks, got \(legacy.listenHost)")
+require(legacy.listenHost == "127.0.0.1",
+        "a Mac with no role must answer loopback only, got \(legacy.listenHost)")
 require(legacy.clientHost == "127.0.0.1", "a default configuration must reach its own Hub on loopback")
+
+// A fresh install has no preference file at all: loopback only, whatever interfaces it has.
+let freshRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-fresh-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: freshRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: freshRoot) }
+let fresh = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", freshRoot.path],
+                                   bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(fresh.listenHost == "127.0.0.1",
+        "a fresh install must listen on loopback only, got \(fresh.listenHost)")
+
+// The role gate is on the policy itself, so "no role" cannot open an interface by accident.
+require(ShellConfiguration.automaticListenHost(keeping: "", current: ["192.168.0.153"], inFleet: false)
+        == "127.0.0.1", "no role must keep every private interface closed")
+require(ShellConfiguration.automaticListenHost(keeping: "", current: ["192.168.0.153"], inFleet: true)
+        == "192.168.0.153", "a role must open this Mac's private interface")
+
+// Picking a role opens the interfaces; a pinned list is never rearranged.
+var picked = fresh
+picked.controllerAddress = nil
+require(picked.followFleetNetworks(current: ["192.168.0.153", "100.76.125.18"])
+        && picked.listenHost == "192.168.0.153,100.76.125.18",
+        "picking a role must open this Mac's private and Tailscale addresses, got \(picked.listenHost)")
+var explicitPin = fresh
+explicitPin.listenHostAutomatic = false
+explicitPin.listenHost = "10.0.0.4"
+require(!explicitPin.followFleetNetworks(current: ["192.168.0.153"]) && explicitPin.listenHost == "10.0.0.4",
+        "a pinned list must survive a role change, got \(explicitPin.listenHost)")
+// Going back to Standalone closes them again, but an explicit choice to be reachable stands.
+var left = picked
+require(left.leaveFleetNetworks() && left.listenHost == "127.0.0.1",
+        "leaving the group must close this Mac's networks, got \(left.listenHost)")
+var stayedOpen = picked
+stayedOpen.listenHostChosen = true
+require(!stayedOpen.leaveFleetNetworks() && stayedOpen.listenHost == "192.168.0.153,100.76.125.18",
+        "an explicit reach-me choice must survive going Standalone")
+
+// A role already picked survives the restart: a controller has no controller address, so the
+// remembered role is the only thing that can keep its networks open next launch.
+let controllerRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-controller-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: controllerRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: controllerRoot) }
+let controllerFile = controllerRoot.appendingPathComponent("app-preferences.json")
+try Data("{\"modelsPath\":\"\",\"offline\":false,\"startAtLogin\":true,\"listenHost\":\"127.0.0.1\",\"lastKnownRole\":\"controller\"}".utf8)
+    .write(to: controllerFile, options: .atomic)
+try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: controllerFile.path)
+let controller = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", controllerRoot.path],
+                                        bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(controller.listenHost == ShellConfiguration.automaticListenHost(keeping: "127.0.0.1"),
+        "a controller must reopen its networks after a restart, got \(controller.listenHost)")
+
+// An upgrade must not close a Mac that was already reachable: a file holding real addresses is a
+// role older than this build, not a fresh install (the one-time downgrade this prevents).
+let upgradedRoot = FileManager.default.temporaryDirectory
+    .appendingPathComponent("studiohub-upgraded-\(UUID().uuidString)")
+try FileManager.default.createDirectory(at: upgradedRoot, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: upgradedRoot) }
+let upgradedFile = upgradedRoot.appendingPathComponent("app-preferences.json")
+try Data("{\"modelsPath\":\"\",\"offline\":false,\"startAtLogin\":true,\"listenHost\":\"192.168.0.153\"}".utf8)
+    .write(to: upgradedFile, options: .atomic)
+try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: upgradedFile.path)
+let upgraded = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", upgradedRoot.path],
+                                      bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
+require(upgraded.listenHost == ShellConfiguration.automaticListenHost(keeping: "192.168.0.153"),
+        "an already-reachable Mac must stay reachable after the upgrade, got \(upgraded.listenHost)")
 
 // Automatic is DERIVED, not additive (owner, 2026-11-17: "did it store it's old assigned DHCP IP
 // too? that's wrong"). A Mac that left a network must not keep queueing services behind the lease
@@ -578,6 +639,7 @@ _ = try ShellConfiguration(
 let autoReopened = try ShellConfiguration(arguments: ["StudioHub", "--data-dir", automaticRoot.path],
                                           bundle: URL(fileURLWithPath: "/Applications/StudioHub.app"))
 require(autoReopened.listenHostAutomatic, "--listen-auto must survive the next launch")
+require(autoReopened.listenHostChosen, "--listen-auto is an explicit choice and must be remembered")
 require(autoReopened.listenHost == ShellConfiguration.automaticListenHost(keeping: "127.0.0.1"),
         "--listen-auto must recompute this Mac's addresses, got \(autoReopened.listenHost)")
 

@@ -48,7 +48,15 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # and the live admission reader passed. See qualification/evidence/image-runtime-psutil-20261106.json.
 # 0.6.246 rebuilt the exact same lock (`cd8cd947...`), CPython (`3.12.14`), and `mlx-serve 26.10.1`
 # after the cached Nov 6 tree was retired (`smoke_imports.py` also includes `multipart` since `f3b8c3e1`).
-IMAGE_RUNTIME_SHA256 = '9fa3c8435e393d7f69f0050952e7b299390c0e8da0c17519760f3b78e51b9e9a'
+#
+# **Re-qualified 2026-11-21.** The previous pin was a *build-path* identity: each `RECORD` was
+# written before the shebang rewrite, so the same packages built in two checkouts had two digests
+# and no second path could ever match. The recipe now rewrites every RECORD after the rewrite and
+# prunes build junk (`runtime_packaging.py normalize-records` / `prune-build-junk`); this value is
+# what it produces, proven at two checkout paths (one identical digest) and by a real generation
+# (512x512 FLUX.2 Klein picture, sha256 c80795c570c0a6b8f9d8f951fb6958135352a615c8344127ebc74468b61e14ba,
+# evidence in Hub Lead 004's receipt). The previous value stays in git history.
+IMAGE_RUNTIME_SHA256 ='a08b58527f2946b211648708fd7f8b9912ada00f98ade82a1dc62514cf580158'
 # Kept so the refusal can name what it was handed and where that tree came from.
 IMAGE_RUNTIME_SUPERSEDED = {
     '810a725d20ef9bbc942d53bfea39e56327964d519d3cb4f33a5eea13a4a08178':
@@ -94,9 +102,14 @@ VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 #
 # Moved at 0.6.248: the same packages and the same measured runs, except that CPython's generated
 # sysconfigdata and `lib/libpython3.12.dylib`'s install name no longer record the build user's home
-# path (packaging/yue2-runtime/neutralize_prefix.py). The previous pin was
-# 75465dc4f1621423511f2500f6d6dec8b7cf3248ce60fc07895350aac41d4fb4.
-YUE2_RUNTIME_SHA256 = '5380877f826205ac4ef6c2025402f4a0b9086acb8a6b6bfc3231672525a86d48'
+# path (packaging/yue2-runtime/neutralize_prefix.py).
+#
+# **Re-qualified 2026-11-21** with the Image pin and for the same reason: the old value carried the
+# build directory through RECORD's self-entry and installer-written hashes. Proven at two checkout
+# paths (one identical digest) and by a real generation (81.36 s, 48 kHz stereo, RMS 0.161, sha256
+# f44dbc4a5c1e4b45fdff77487c031dfe9dfb14006c299083067e9b2b19dff147, evidence in Hub Lead 004's
+# receipt). Earlier values stay in git history.
+YUE2_RUNTIME_SHA256 ='9a47de1869bf569aa9f491f4ee524f5de23c68750d7604159917e1df63f60837'
 
 # What a Hub release ships, declared here so a build cannot quietly narrow it.
 #

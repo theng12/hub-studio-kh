@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -501,6 +502,69 @@ def normalize_python_shebangs(root: Path) -> list[str]:
     return changed
 
 
+def prune_build_junk(root: Path) -> list[str]:
+    """Remove files that describe the build machine or its caches, not the runtime.
+
+    `.DS_Store` and `__pycache__`/`.pyc` are Finder and interpreter leftovers; `uv_cache.json`
+    and `BUILD` are markers written by the installer. None of them is code, and any of them
+    makes the digest depend on how the tree was produced.
+    """
+    remove_names = {".DS_Store", "uv_cache.json", "BUILD"}
+    removed: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and not path.is_symlink() and (
+                path.name in remove_names or path.suffix in {".pyc", ".pyo"}):
+            path.unlink()
+            removed.append(path.relative_to(root).as_posix())
+    for path in sorted(root.rglob("__pycache__")):
+        if path.is_dir() and not path.is_symlink() and not any(path.iterdir()):
+            path.rmdir()
+            removed.append(path.relative_to(root).as_posix())
+    return sorted(removed)
+
+
+def normalize_record_files(root: Path) -> list[str]:
+    """Recompute every `.dist-info/RECORD` from the tree as it is now.
+
+    The installer writes a RECORD entry for each console script **before** the shebang rewrite,
+    so the recorded size and hash carry the build directory's path length. That made the tree
+    digest a build-path identity: two checkouts of the same content could never agree. Running
+    this after `normalize-shebangs` makes the tree a content identity again.
+    """
+    # Resolved, because every entry below is: on macOS /var and /tmp are themselves links, so an
+    # unresolved root would not be a parent of any resolved path and every row would be dropped.
+    root = root.resolve()
+    changed: list[str] = []
+    for record in sorted(root.rglob("*.dist-info/RECORD")):
+        base = record.parent.parent
+        rows: list[str] = []
+        for line in record.read_text().splitlines():
+            if not line:
+                continue
+            parts = line.rsplit(",", 2)
+            relative = parts[0]
+            target = base / relative
+            resolved = target.resolve()
+            if resolved == record.resolve():
+                # The RECORD cannot hash itself: writing the hash would change the bytes it
+                # describes. An empty hash and size is the standard self-entry, and it is also
+                # what makes the file identical at every build path.
+                rows.append(f"{relative},,")
+                continue
+            if root not in resolved.parents and resolved != root:
+                continue  # a path outside the runtime is not this tree's to describe
+            if target.is_symlink() or not target.is_file():
+                continue  # build junk was pruned, or the entry is a link: RECORD lists files only
+            digest = base64.urlsafe_b64encode(
+                hashlib.sha256(target.read_bytes()).digest()).rstrip(b"=").decode()
+            rows.append(f"{relative},sha256={digest},{target.stat().st_size}")
+        text = "\n".join(rows) + "\n"
+        if text != record.read_text():
+            record.write_text(text)
+            changed.append(record.relative_to(root).as_posix())
+    return changed
+
+
 def collect_macho_audit(
     root: Path, target: str
 ) -> tuple[list[dict[str, object]], list[str]]:
@@ -758,6 +822,12 @@ def main() -> int:
     strip_parser = subparsers.add_parser("strip-tests")
     strip_parser.add_argument("root", type=Path)
 
+    prune_parser = subparsers.add_parser("prune-build-junk")
+    prune_parser.add_argument("root", type=Path)
+
+    record_parser = subparsers.add_parser("normalize-records")
+    record_parser.add_argument("root", type=Path)
+
     args = parser.parse_args()
     root = args.root.resolve()
     if args.command == "audit":
@@ -778,6 +848,12 @@ def main() -> int:
     elif args.command == "normalize-shebangs":
         changed = normalize_python_shebangs(root)
         print(json.dumps(changed, indent=2))
+        return 0
+    elif args.command == "prune-build-junk":
+        print(json.dumps(prune_build_junk(root), indent=2))
+        return 0
+    elif args.command == "normalize-records":
+        print(json.dumps(normalize_record_files(root), indent=2))
         return 0
     elif args.command == "strip-tests":
         print(json.dumps(strip_test_only(root), indent=2))

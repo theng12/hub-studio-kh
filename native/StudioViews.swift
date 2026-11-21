@@ -7926,6 +7926,11 @@ struct StudioContent: View {
             Text("A **Controller** runs its own group and sends work to nodes; a **Node** is sent work by a controller; **Standalone** is a Mac on its own. The role applies immediately.")
                 .font(HubType.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if studio.configuration.listenHosts.allSatisfy({ $0 == "127.0.0.1" }) {
+                Text("Only this Mac can reach the Hub right now. Picking a role here, or joining a group, opens it on this Mac's private and Tailscale networks — restart the services afterwards to apply it. The Network section below says exactly what is open.")
+                    .font(HubType.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             }
 
             HubSection("Network") {
@@ -7948,14 +7953,14 @@ struct StudioContent: View {
                 }
             }
             // A setting that changes by itself has to say so, and has to be switchable off. On, the
-            // list below is recomputed at every launch from this Mac's own networks — the owner's
-            // ask was "i keep forgetting to turn on tailscale. i want it already the default on."
+            // list below is recomputed at every launch from this Mac's own networks — once this
+            // Mac has a role (owner, 2026-11-21: "loopback-only until a role is picked").
             Toggle("Follow this Mac's networks automatically", isOn: Binding(
                 get: { studio.configuration.listenHostAutomatic },
                 set: { setListenAutomatic($0) }))
                 .toggleStyle(.checkbox)
             if studio.configuration.listenHostAutomatic {
-                Text("Loopback and every private or Tailscale address this Mac has, recomputed each time it starts. Never a public address.")
+                Text("Every private or Tailscale address this Mac has, recomputed each time it starts — once this Mac is a controller or a node, or now that you have switched this on. Never a public address. Until then it answers this Mac only.")
                     .font(HubType.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -9106,6 +9111,8 @@ struct StudioContent: View {
     private func setListenAutomatic(_ automatic: Bool) {
         studio.configuration.listenHostAutomatic = automatic
         if automatic {
+            // Turning it on is a choice, and a choice outranks the role gate on a Mac with no role.
+            studio.configuration.listenHostChosen = true
             studio.configuration.listenHost = ShellConfiguration.automaticListenHost(
                 keeping: studio.configuration.listenHost)
         }
