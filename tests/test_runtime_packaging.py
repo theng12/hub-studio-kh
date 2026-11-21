@@ -438,12 +438,37 @@ class RuntimeTestOnlyContentTests(unittest.TestCase):
 
             self.assertEqual(packaging.verify_file_manifest(root), [])
             self.assertNotIn("numpy/tests/test_basic.py", after)
+            self.assertIn("numpy/tests/test_basic.py", before)
             self.assertEqual(manifest.stat().st_mode & 0o777, 0o444)
             self.assertEqual(manifest.parent.stat().st_mode & 0o777, 0o555)
             manifest.parent.chmod(0o755)
             manifest.chmod(0o644)
 
-        self.assertIn("numpy/tests/test_basic.py", before)
+    def test_sweep_removes_generated_bytecode_and_its_empty_pycache(self):
+        # A spawn that ran the runtime's own interpreter without -B rewrites __pycache__ after the
+        # build's sweep, and each .pyc names the build path (0.6.257 run 1 failed no-home-path on
+        # six). The bundle boundary must remove them, not only test files.
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.staged_runtime(Path(temporary))
+            cache = root / "lib" / "python3.12" / "site-packages" / "numpy" / "__pycache__"
+            cache.mkdir()
+            compiled = cache / "__init__.cpython-312.pyc"
+            compiled.write_bytes(b"\x00/Users/builder/work/.build/voice-runtime\x00")
+            packaging.write_file_manifest(root)
+
+            removed = packaging.strip_test_only(root)["removed"]
+
+            self.assertIn(
+                "lib/python3.12/site-packages/numpy/__pycache__/__init__.cpython-312.pyc",
+                removed,
+            )
+            self.assertFalse(compiled.exists())
+            self.assertFalse(cache.exists())  # the emptied __pycache__ directory goes too
+            self.assertEqual(packaging.verify_file_manifest(root), [])
+            self.assertNotIn(
+                "__pycache__", (root / "manifest" / "runtime-files.json").read_text()
+            )
 
     def test_sweep_works_on_a_read_only_staged_runtime(self):
         packaging = load_packager()
