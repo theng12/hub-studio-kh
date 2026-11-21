@@ -2,8 +2,8 @@
 
 Version being deployed: the one this kit's own `focused-release-manifest.json` records (its
 `version` and `implementation_commit` — a version pinned in this sentence went stale every
-build), with **40** model packages in the source catalog (Stable Audio 3 Medium and YuE2 3B are the music models).
-Normal setup copies **40 production-allowed packages** (about 177.0 GB). No package is withheld pending qualification any more (owner, 2026-10-27: "We no longer block or lock any model."); the Mac's own memory is what decides which of them it copies and runs. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim an existing SSD or Mac already has its weights, which remains a kit-receipt fact.
+build), with **41** model packages in the source catalog (Stable Audio 3 Medium and YuE2 3B are the music models).
+Normal setup copies **41 production-allowed packages** (about 193.1 GB). No package is withheld pending qualification any more (owner, 2026-10-27: "We no longer block or lock any model."); the Mac's own memory is what decides which of them it copies and runs. Qwen Image 2.1 Turbo MLX 4-bit is production-eligible on 16 GB and larger Macs; eligibility does not claim an existing SSD or Mac already has its weights, which remains a kit-receipt fact.
 
 ## What I have verified
 

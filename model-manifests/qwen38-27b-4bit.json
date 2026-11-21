@@ -1,0 +1,135 @@
+{
+  "defaults": {
+    "parameters_source": "model/generation_config.json"
+  },
+  "display_name": "Qwen 3.8 27B MLX 4-bit",
+  "engine": "chat-mlx",
+  "files": [
+    {
+      "path": "model/chat_template.jinja",
+      "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+      "size": 8952,
+      "source_path": "chat_template.jinja",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/chat_template.jinja"
+      ]
+    },
+    {
+      "path": "model/config.json",
+      "sha256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85",
+      "size": 4932,
+      "source_path": "config.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/config.json"
+      ]
+    },
+    {
+      "path": "model/generation_config.json",
+      "sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "size": 202,
+      "source_path": "generation_config.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/generation_config.json"
+      ]
+    },
+    {
+      "path": "model/model-00001-of-00003.safetensors",
+      "sha256": "471a9a81b54dddbfef43e8a71960ca24ad3c727891c6b0750a9db9a214aab504",
+      "size": 5343268752,
+      "source_path": "model-00001-of-00003.safetensors",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/model-00001-of-00003.safetensors"
+      ]
+    },
+    {
+      "path": "model/model-00002-of-00003.safetensors",
+      "sha256": "e7474b8f968f4078dfd4889925961c5b0da9939219b614dba08eb63c46590de7",
+      "size": 5354185100,
+      "source_path": "model-00002-of-00003.safetensors",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/model-00002-of-00003.safetensors"
+      ]
+    },
+    {
+      "path": "model/model-00003-of-00003.safetensors",
+      "sha256": "1038989bed1346ecdb541a45c078df2aae99a9509f35bfd51e7a04802a5d8402",
+      "size": 5357087747,
+      "source_path": "model-00003-of-00003.safetensors",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/model-00003-of-00003.safetensors"
+      ]
+    },
+    {
+      "path": "model/model.safetensors.index.json",
+      "sha256": "13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8",
+      "size": 218281,
+      "source_path": "model.safetensors.index.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/model.safetensors.index.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer.json",
+      "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+      "size": 19989325,
+      "source_path": "tokenizer.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/tokenizer.json"
+      ]
+    },
+    {
+      "path": "model/tokenizer_config.json",
+      "sha256": "47a7a8371379b07650b22f3c8a78c32fed85c4e35ea88e3da0c4b7a7611e8082",
+      "size": 10404,
+      "source_path": "tokenizer_config.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/tokenizer_config.json"
+      ]
+    },
+    {
+      "path": "model/vocab.json",
+      "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+      "size": 6722759,
+      "source_path": "vocab.json",
+      "urls": [
+        "https://huggingface.co/lmstudio-community/Qwen3.8-27B-MLX-4bit/resolve/6067b15cf581666a4aecf6af3afaba4bb5efc20c/vocab.json"
+      ]
+    }
+  ],
+  "minimum_macos": "14.0",
+  "model_id": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
+  "package_id": "qwen38-27b-4bit",
+  "production_allowed": true,
+  "qualification": {
+    "memory_evidence": "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its ten runtime files total 16,081,496,454 bytes (14.98 GiB), so the smallest published fleet tier that can hold them is 24 GB and 16 GB cannot. 32 GB is recommended because a dense 27B checkpoint's resident footprint adds KV cache and activations on top of its weights and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified.",
+    "minimum_unified_memory_gb": 24,
+    "reason": "Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). Dense 27B English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.",
+    "recommended_unified_memory_gb": 32,
+    "status": "unqualified",
+    "tested_usable_context_tokens": null
+  },
+  "quantization": "MLX 4-bit",
+  "quantization_source": "model/config.json quantization; preserved per-tensor overrides",
+  "revision": "6067b15cf581666a4aecf6af3afaba4bb5efc20c",
+  "schema_version": 1,
+  "source": {
+    "captured_at": "2026-11-21",
+    "layout": {
+      "model": {
+        "destination": "model",
+        "repo": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
+        "revision": "6067b15cf581666a4aecf6af3afaba4bb5efc20c"
+      }
+    },
+    "provider": "huggingface",
+    "sources": [
+      {
+        "repo": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
+        "revision": "6067b15cf581666a4aecf6af3afaba4bb5efc20c",
+        "role": "model",
+        "snapshot_api_url": "https://huggingface.co/api/models/lmstudio-community/Qwen3.8-27B-MLX-4bit/revision/6067b15cf581666a4aecf6af3afaba4bb5efc20c",
+        "tree_api_url": "https://huggingface.co/api/models/lmstudio-community/Qwen3.8-27B-MLX-4bit/tree/6067b15cf581666a4aecf6af3afaba4bb5efc20c?recursive=true&expand=true&limit=100"
+      }
+    ]
+  }
+}

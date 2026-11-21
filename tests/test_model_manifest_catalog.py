@@ -510,6 +510,11 @@ class ModelManifestCatalogTests(unittest.TestCase):
             # Digest moved on 2026-10-27 for the same reason as Nemotron: admitted by name, RAM
             # floor published at a PROVISIONAL 24/32 GB (the package is 19.03 GiB of weights).
             "qwen36-35b-4bit": "348569723abbba433f4fd5089081f1da0e0a802a9f3113c8ee6d2c3fe5d5a4f1",
+            # Qwen 3.8 27B MLX 4-bit: 10 runtime files / 16,081,496,454 bytes (14.98 GiB). Dense,
+            # hybrid attention. The publisher's README, .gitattributes and three vision
+            # preprocessor configs are excluded by the catalog's furniture policy; every weight,
+            # tokenizer and config file is pinned at revision 6067b15c….
+            "qwen38-27b-4bit": "ab9b75d223c03f0046c3ef0bf3435ba087b4fbd446a2aa5348e8c52e61b86e77",
             # Gemma 4 26B-A4B QAT MLX 4-bit: 10 runtime files / 15,641,239,295 bytes.
             # The independently verified 11-file SSD stock remains whole; runtime capture
             # excludes only its 363-byte README.md. Only the 32 GiB qualification metadata

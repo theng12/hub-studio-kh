@@ -99,7 +99,7 @@ class PresetDataTests(unittest.TestCase):
                           "omnivoice-bfloat16", "breeze-tts-2-mlx-4bit", "yue2-3b-mlx"})
         self.assertEqual(set(model_presets.by_id("creator-plus-24")["packages"])
                          - set(model_presets.by_id("creator-16")["packages"]),
-                         {"gemma-3-12b-it-4bit"})
+                         {"gemma-3-12b-it-4bit", "qwen38-27b-4bit"})
         self.assertEqual(set(model_presets.by_id("studio-pro-32")["packages"])
                          - set(model_presets.by_id("creator-plus-24")["packages"]),
                          {"qwen36-35b-4bit", "gemma4-26b-a4b-qat-4bit"})
@@ -206,6 +206,22 @@ class StartingPresetTests(unittest.TestCase):
 
 
 class RefusalTests(unittest.TestCase):
+    def test_qwen38_27b_is_greyed_on_16gb_and_offered_on_24_and_32(self) -> None:
+        """The acceptance the owner asked for, on the shipped catalog rather than a fixture: the
+        model is visible everywhere and refused only where its own floor says the Mac is too small."""
+        manifests = {path.stem: json.loads(path.read_text())
+                     for path in (ROOT / "model-manifests").glob("*.json")}
+        manifest = manifests["qwen38-27b-4bit"]
+        self.assertEqual(model_presets.refusal("qwen38-27b-4bit", manifest, 16),
+                         "Needs a Mac with at least 24 GB of memory; this one has 16 GB. "
+                         "Everything else installs; this model is left out.")
+        for memory in (24, 32, 64):
+            self.assertIsNone(model_presets.refusal("qwen38-27b-4bit", manifest, memory))
+        for preset_id in ("creator-plus-24", "studio-pro-32"):
+            self.assertIn("qwen38-27b-4bit", model_presets.by_id(preset_id)["packages"])
+        for preset_id in ("essentials-8", "creator-16"):
+            self.assertNotIn("qwen38-27b-4bit", model_presets.by_id(preset_id)["packages"])
+
     def test_a_model_too_big_is_refused_with_both_numbers(self) -> None:
         manifest = {"package_id": "big", "qualification": {"minimum_unified_memory_gb": 32}}
         reason = model_presets.refusal("big", manifest, 16)

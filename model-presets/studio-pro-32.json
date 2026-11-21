@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "preset_id": "studio-pro-32",
-  "name": "Studio Pro \u00b7 32 GB+",
+  "name": "Studio Pro · 32 GB+",
   "memory_tier_gb": 32,
   "summary": "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
   "packages": [
@@ -22,6 +22,7 @@
     "yue2-3b-mlx",
     "gemma-3-12b-it-4bit",
     "qwen36-35b-4bit",
-    "gemma4-26b-a4b-qat-4bit"
+    "gemma4-26b-a4b-qat-4bit",
+    "qwen38-27b-4bit"
   ]
 }

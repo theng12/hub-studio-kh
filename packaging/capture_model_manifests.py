@@ -166,6 +166,22 @@ CHOICES: tuple[dict[str, Any], ...] = (
      "display_name": "Qwen 3.6 35B-A3B MLX 4-bit",
      "quantization": "MLX 4-bit",
      "quantization_source": "model/config.json quantization; preserved per-tensor 8-bit gate overrides"},
+    # Qwen3.8 dense 27B, owner-selected by name (2026-11-21). The only 24 GB-class model in the
+    # research note that keeps a long context (hybrid GatedDeltaNet/GatedAttn, 16 of 64 layers
+    # full attention), so it is the one dense model worth 16 GB of every Mac's disk. Runtime
+    # capture follows the established policy: inference files only. The publisher's
+    # `preprocessor_config.json`, `video_preprocessor_config.json` and `processor_config.json`
+    # describe a vision path this chat engine never calls, and `README.md`/`.gitattributes` are
+    # publisher furniture - all five are excluded rather than shipped as dead weight.
+    {"package_id": "qwen38-27b-4bit",
+     "model_id": "lmstudio-community/Qwen3.8-27B-MLX-4bit",
+     "revision": "6067b15cf581666a4aecf6af3afaba4bb5efc20c", "engine": "chat-mlx",
+     "captured_at": "2026-11-21", "production_allowed": True,
+     "display_name": "Qwen 3.8 27B MLX 4-bit",
+     "quantization": "MLX 4-bit",
+     "quantization_source": "model/config.json quantization; preserved per-tensor overrides",
+     "exclude": ("README.md", ".gitattributes", "preprocessor_config.json",
+                 "video_preprocessor_config.json", "processor_config.json")},
     # Owner-selected MoE. The full stock package keeps all eleven publisher-verified files; the
     # runtime manifest follows the established capture policy and omits the README, leaving ten
     # inference files. Admitted 2026-10-27 like qwen36. Its usable context is still unknown, and
@@ -371,6 +387,15 @@ DETAILS: dict[str, dict[str, Any]] = {
             "reason": "Qualified on the owner's physical 32 GiB M2 Max and M2 Pro. The original extended strict 3x1,200-word test remains FAIL: it produced 985, 800 and 805 words; the owner accepted those observed lengths. The 50-scene case returned all 50 exact IDs as strict JSON. On 2026-11-02, Mac 1607 (32 GiB M2 Pro) passed input-48k: 49,120 measured prompt tokens plus 1,915 completion tokens, all 16 sections and the needle recalled, 21,150,477,952-byte process peak (19.70 GiB), normal pressure and no new swap. input-64k failed quality (14/16 sections), despite normal memory. qualification.context_window_tokens=49,152 is the owner-approved curated hardware budget for combined input plus reserved output, not a model claim; the checkpoint retains its model-declared text_config.max_position_embeddings=262,144. tested_usable_context_tokens=51,035 records the successful combined token count, not a qualified 49,152-token prompt plus 8,192 output. The 8,192 output cap is owner policy, not a new output-length measurement. Physical 24 GiB and 16 GiB were not tested. Evidence: qualification/evidence/gemma4-20261102-1607-48k/report.json.",
             "context_window_tokens": 49152,
             "tested_usable_context_tokens": 51035,
+        },
+    },
+    "qwen38-27b-4bit": {
+        "defaults": {"parameters_source": "model/generation_config.json"},
+        "memory": (24, 32, "PROVISIONAL, NOT MEASURED. Derived from the package this manifest ships: its ten runtime files total 16,081,496,454 bytes (14.98 GiB), so the smallest published fleet tier that can hold them is 24 GB and 16 GB cannot. 32 GB is recommended because a dense 27B checkpoint's resident footprint adds KV cache and activations on top of its weights and no peak has been observed on any Mac. This is a weight-size floor, not a measured tier, and no inference, TPS, script or scene-quality run has happened. Replace it with a measurement (qualification/model-readings.json) before treating the model as qualified."),
+        "qualification": {
+            "status": "unqualified",
+            "reason": 'Downloaded and publisher-hash verified only. Installable and dispatchable: the RAM floor above is the only gate (owner decision, 2026-10-27 - no model is blocked or locked by name). Dense 27B English import, inference, TPS, script/scene quality, usable context and a MEASURED RAM tier have not yet been run.',
+            "tested_usable_context_tokens": None,
         },
     },
     "qwen36-35b-4bit": {
