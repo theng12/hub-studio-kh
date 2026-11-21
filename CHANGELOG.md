@@ -2,6 +2,17 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.257 — 2026-11-21
+
+- **A new local text model: Qwen 3.8 27B.** A capable 27-billion-parameter model that keeps a long conversation usable, offered on the Macs that can hold it. Macs with 24 GB or more can pick it; a 16 GB Mac shows it greyed with the reason — "Needs a Mac with at least 24 GB of memory; this one has 16 GB" — rather than hiding it, because a model you cannot see is harder to plan around than one you can. It downloads 15 GB, so the download checks for room first and resumes rather than starting over.
+
+### Technical notes
+- `model-manifests/qwen38-27b-4bit.json` — captured through `packaging/capture_model_manifests.py`'s own `capture()` from revision `6067b15cf581666a4aecf6af3afaba4bb5efc20c` of `lmstudio-community/Qwen3.8-27B-MLX-4bit`: 10 runtime files, 16,081,496,454 bytes (14.98 GiB), each at its publisher LFS sha256. `README.md`, `.gitattributes` and the three vision preprocessor configs are excluded as publisher furniture this `chat-mlx` engine never reads; every weight, tokenizer and config file ships.
+- The floor is `qualification.minimum_unified_memory_gb: 24` / `recommended_unified_memory_gb: 32`, marked PROVISIONAL and not measured — 14.98 GiB of weights plus KV cache and activations cannot fit 16 GB, and no peak has been observed on any Mac. `model_presets.refusal()` is what greys the row; no code changed, matching the rule in `components/model_presets.py` that a model needs data, not code.
+- `model-presets/creator-plus-24.json` and `model-presets/studio-pro-32.json` carry the id; `essentials-8` and `creator-16` do not, so no machine that cannot run it is offered it. Catalogue documents updated to 41 packages / 193,108,059,159 bytes (`model-manifests/README.md`, `packaging/kit-readmes/Studio Hub KH.md`, `qualification/NODE-SETUP-CHECKLIST.md`, `qualification/SSD-KIT-README.md`, `docs/runtime-contract.md`).
+- Tests: `tests/test_model_presets.py` gains the acceptance (the exact 16 GB sentence, selectable at 24/32/64, present in the two presets and absent from the two smaller ones); `tests/test_model_manifest_catalog.py` gains the manifest digest. 68 tests OK across the presets, catalogue and document inventories.
+- A full `capture_model_manifests.py --write` cannot run today: a different package's pinned revision no longer resolves (`mflux-community/qwen-image-2-1-turbo-mflux-q4` at `bda8951e…`, HTTP 404 — issue `20261121-258`). That is recorded, not worked around.
+
 ## 0.6.256 — 2026-11-21
 
 - **A new Mac answers only itself until you give it a role.** A freshly installed Hub used to open up on every private network it was on — LAN and Tailscale — from the first launch. Now it listens on this Mac only. Picking a role (Controller or Node) or joining a group opens its private and Tailscale networks, and the Connections page says exactly what is open. The machine type is remembered, so a Controller keeps its networks after a restart. The "Follow this Mac's networks" switch and a pinned address list still do exactly what you set.

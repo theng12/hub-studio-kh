@@ -52,5 +52,5 @@ route cloud work.
 
 ## Current version
 
-0.6.256, from the root `VERSION` file; the newest `CHANGELOG.md` entry agrees. The
+0.6.257, from the root `VERSION` file; the newest `CHANGELOG.md` entry agrees. The
 README's "0.6.38" is an old observed installed version, not the source version.
