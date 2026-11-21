@@ -531,6 +531,9 @@ def normalize_record_files(root: Path) -> list[str]:
     digest a build-path identity: two checkouts of the same content could never agree. Running
     this after `normalize-shebangs` makes the tree a content identity again.
     """
+    # Resolved, because every entry below is: on macOS /var and /tmp are themselves links, so an
+    # unresolved root would not be a parent of any resolved path and every row would be dropped.
+    root = root.resolve()
     changed: list[str] = []
     for record in sorted(root.rglob("*.dist-info/RECORD")):
         base = record.parent.parent
@@ -540,16 +543,17 @@ def normalize_record_files(root: Path) -> list[str]:
                 continue
             parts = line.rsplit(",", 2)
             relative = parts[0]
-            target = (base / relative).resolve()
-            if target == record.resolve():
+            target = base / relative
+            resolved = target.resolve()
+            if resolved == record.resolve():
                 # The RECORD cannot hash itself: writing the hash would change the bytes it
                 # describes. An empty hash and size is the standard self-entry, and it is also
                 # what makes the file identical at every build path.
                 rows.append(f"{relative},,")
                 continue
-            if root not in target.parents and target != root:
+            if root not in resolved.parents and resolved != root:
                 continue  # a path outside the runtime is not this tree's to describe
-            if not target.is_file() or target.is_symlink():
+            if target.is_symlink() or not target.is_file():
                 continue  # build junk was pruned, or the entry is a link: RECORD lists files only
             digest = base64.urlsafe_b64encode(
                 hashlib.sha256(target.read_bytes()).digest()).rstrip(b"=").decode()

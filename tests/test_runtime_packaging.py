@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -498,6 +500,80 @@ class RuntimeTestOnlyContentTests(unittest.TestCase):
             staging.index("stripped = strip_runtime_tests(resources / 'runtimes/voice')"),
             staging.index("runtime_hash = tree_digest(resources / 'runtimes/voice')"),
         )
+
+
+class RuntimeNormalizationTests(unittest.TestCase):
+    """The recipe step that made a runtime's digest its content instead of its build path."""
+
+    def test_prune_build_junk_removes_markers_and_keeps_code(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lib" / "pkg-1.0.dist-info").mkdir(parents=True)
+            (root / "lib" / "__pycache__").mkdir()
+            (root / "lib" / "used" / "__pycache__").mkdir(parents=True)
+            (root / "lib" / "used" / "__pycache__" / "state.json").write_text("{}")
+            for name in ("lib/.DS_Store", "lib/pkg-1.0.dist-info/uv_cache.json",
+                         "lib/pkg-1.0.dist-info/BUILD", "lib/mod.pyc", "lib/keep.py"):
+                (root / name).write_text("x")
+
+            removed = packaging.prune_build_junk(root)
+
+            self.assertTrue((root / "lib" / "keep.py").is_file())
+            self.assertIn("lib/__pycache__", removed)
+            self.assertIn("lib/mod.pyc", removed)
+            for name in ("lib/.DS_Store", "lib/pkg-1.0.dist-info/uv_cache.json",
+                         "lib/pkg-1.0.dist-info/BUILD"):
+                self.assertIn(name, removed)
+                self.assertFalse((root / name).exists())
+            self.assertTrue((root / "lib" / "used" / "__pycache__").is_dir(),
+                            "a cache directory that still holds something is not junk")
+
+    def test_normalize_records_clears_the_self_entry_and_hashes_content(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dist = root / "lib" / "pkg-1.0.dist-info"
+            dist.mkdir(parents=True)
+            (root / "lib" / "mod.py").write_text("print('hello')\n")
+            record = dist / "RECORD"
+            # RECORD paths are relative to the directory that holds the .dist-info, as pip writes
+            # them: `lib` here, `site-packages` in a real runtime.
+            record.write_text(
+                "pkg-1.0.dist-info/RECORD,sha256=stale-of-a-longer-build-path,99\n"
+                "mod.py,sha256=stale-of-the-unrewritten-shebang,99\n"
+            )
+
+            changed = packaging.normalize_record_files(root)
+
+            rows = record.read_text().splitlines()
+            self.assertEqual(rows[0], "pkg-1.0.dist-info/RECORD,,")
+            digest = base64.urlsafe_b64encode(
+                hashlib.sha256((root / "lib" / "mod.py").read_bytes()).digest()
+            ).rstrip(b"=").decode()
+            size = (root / "lib" / "mod.py").stat().st_size
+            self.assertEqual(rows[1], f"mod.py,sha256={digest},{size}")
+            self.assertEqual(changed, ["lib/pkg-1.0.dist-info/RECORD"])
+            self.assertEqual(packaging.normalize_record_files(root), [],
+                             "a second run changes nothing")
+
+    def test_normalize_records_drops_missing_and_link_entries(self):
+        packaging = load_packager()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dist = root / "lib" / "pkg-1.0.dist-info"
+            dist.mkdir(parents=True)
+            (root / "lib" / "real.py").write_text("x\n")
+            os.symlink(root / "lib" / "real.py", root / "lib" / "link.py")
+            record = dist / "RECORD"
+            record.write_text(
+                "missing.py,sha256=gone,1\nlink.py,sha256=link,1\nreal.py,sha256=old,1\n"
+            )
+
+            packaging.normalize_record_files(root)
+
+            self.assertEqual([row.split(",")[0] for row in record.read_text().splitlines()],
+                             ["real.py"])
 
 
 if __name__ == "__main__":
