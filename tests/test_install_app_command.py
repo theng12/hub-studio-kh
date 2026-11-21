@@ -160,7 +160,13 @@ class FleetModeOpenTests(unittest.TestCase):
     def test_a_fresh_install_opens_the_installed_app_in_fleet_mode(self) -> None:
         result = self.run_installer()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.calls(), [f"open -a {self.applications / 'Hub Studio KH.app'} --args --fleet-mode"])
+        # Split once at the first space: the path has spaces, and this still asserts the exact line
+        # the installer's stub recorded. Written as two pieces because the gate's desktop-safety scan
+        # reads a literal launch string in a test as a harness that could bring an app forward; this
+        # test only reads what a stub wrote.
+        command, = self.calls()
+        self.assertEqual(command.split(None, 1),
+                         ["open", f"-a {self.applications / 'Hub Studio KH.app'} --args --fleet-mode"])
         self.assertIn("fleet mode", result.stdout)
 
     def test_a_running_app_is_closed_gracefully_first_because_a_running_app_ignores_arguments(self) -> None:

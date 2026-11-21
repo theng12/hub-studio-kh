@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import math
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -99,6 +100,19 @@ class Decide(unittest.TestCase):
         self.assertEqual(workstation.decide(s, idle_s=999, locked=False, now=NOON, since_yield=10,
                                             yield_reason="pressure")[0], "yielded")
         self.assertEqual(workstation.decide(s, idle_s=999, locked=False, now=NOON, since_yield=61)[0], "working")
+
+
+class MacReads(unittest.TestCase):
+    """The two reads Lite Mode decides on, taken from this Mac for real (nothing mocked)."""
+
+    def test_idle_time_comes_from_the_hid_system(self) -> None:
+        for _ in range(2):
+            value = workstation.hid_idle_seconds()
+            self.assertIsInstance(value, float, "the HID idle read must answer on a Mac")
+            self.assertTrue(math.isfinite(value) and value >= 0.0, value)
+
+    def test_a_locked_screen_reads_as_a_bool(self) -> None:
+        self.assertIsInstance(workstation.screen_locked(), bool)
 
 
 class Admission(_Settings):
