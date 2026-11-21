@@ -1,8 +1,8 @@
 #!/bin/sh
 # INSTALL KH UPDATER
 #
-# Double-click this file on any Mac that runs one of the three apps — Story Studio, GatewayKH or
-# Studio Hub. It installs **KH Updater**, the small agent that keeps those apps up to date, and
+# Double-click this file on any Mac that runs one of the KH apps — Story Studio, GatewayKH, Relay
+# Studio or Hub Studio. It installs **KH Updater**, the small agent that keeps those apps up to date, and
 # starts it. Nothing else on the Mac is changed and nothing needs the administrator password:
 # everything lives in your own ~/Library/KHUpdater.
 #

@@ -4087,6 +4087,9 @@ final class NativeWorkspaceStore: ObservableObject {
     /// Called once a join succeeds, so the app can save the controller for the next start; called
     /// with nil when this Mac stops being somebody else's node.
     var onControllerJoined: ((String?) -> Void)?
+    /// This Mac has left its group. Distinct from `onControllerJoined(nil)`, which a promotion
+    /// to controller also sends: leaving means the role is gone, so the app can close the networks.
+    var onFleetLeft: (() -> Void)?
     @Published private(set) var fleetNote: String?
     /// The last thing the Connections page did, kept on screen until it is dismissed.
     ///
@@ -8166,6 +8169,7 @@ final class NativeWorkspaceStore: ObservableObject {
         // left showing the credential of a group this Mac is no longer in.
         onFleetCredentialChanged?()
         onControllerJoined?(nil)
+        onFleetLeft?()
         return cleared
     }
 

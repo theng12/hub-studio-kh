@@ -626,6 +626,61 @@ class TheAgentTableGivesHubItsOwnAttempts(unittest.TestCase):
             for app in ("gateway", "story", "updater"):
                 self.assertIs(table[app]["automatic"], False, app)
 
+    def test_relay_is_managed_before_it_is_installed_and_after(self):
+        """Relay joins Hub's automatic path (owner, 2026-11-21), and 0.3.33 is on no Mac.
+
+        A row that only appeared when the bundle was found would never install it: the agent only
+        works apps its table lists, so the entry has to be written with the feed's recipe and an
+        empty path, and the found bundle replaces it on the Macs that already have one.
+        """
+        with tempfile.TemporaryDirectory(prefix="hub-agent-relay-") as temp:
+            home = Path(temp)
+            table = khu_agent.app_config(home, home)
+            self.assertEqual(table["relay"], {"bundlePath": "", "recipe": "app-dmg",
+                                              "automatic": True})
+            contents = home / "Applications/Relay Studio KH.app/Contents"
+            contents.mkdir(parents=True)
+            (contents / "Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleIdentifier": "kh.relay.desktop"}))
+            found = khu_agent.app_config(home, home)["relay"]
+            self.assertEqual(found["recipe"], "app-dmg")
+            self.assertIs(found["automatic"], True)
+            self.assertEqual(found["bundleID"], "kh.relay.desktop")
+            self.assertTrue(found["bundlePath"].endswith("Relay Studio KH.app"))
+
+    def test_an_enrolled_mac_gains_the_relay_row_without_losing_its_own_choices(self):
+        """The table is written at enrolment, so an old config has to be added to.
+
+        Every fleet Mac was enrolled before Relay existed. Reconciling keeps each saved row
+        byte-for-byte (an owner's Automatic choice is not re-decided) and writes the file only
+        when there is something new.
+        """
+        with tempfile.TemporaryDirectory(prefix="hub-agent-reconcile-") as temp:
+            home = Path(temp)
+            bootstrap = khu_agent.Bootstrap(Path(temp) / "kit", home)
+            bootstrap.base.mkdir(parents=True)
+            config_file = bootstrap.base / "config.json"
+            saved = {"feedURL": "http://publisher.example", "publicKey": "A" * 43 + "=",
+                     "machine": "fixture-mac", "token": "t" * 40,
+                     "stateDir": str(bootstrap.root / "state"), "stubBase": str(bootstrap.base),
+                     "apps": {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False},
+                              "hub": {"bundlePath": "/Applications/Hub Studio KH.app",
+                                      "recipe": "hub", "automatic": False}},
+                     "intervalMinutes": 5, "once": False}
+            config_file.write_text(json.dumps(saved))
+            self.assertIs(bootstrap.reconcile_apps(), True)
+            table = json.loads(config_file.read_text())
+            self.assertEqual(table["apps"]["hub"], saved["apps"]["hub"])
+            self.assertEqual(table["apps"]["updater"], saved["apps"]["updater"])
+            self.assertEqual(table["apps"]["relay"],
+                             {"bundlePath": "", "recipe": "app-dmg", "automatic": True})
+            self.assertEqual({k: table[k] for k in saved if k != "apps"},
+                             {k: saved[k] for k in saved if k != "apps"})
+            self.assertIs(bootstrap.reconcile_apps(), False, "a second pass writes nothing")
+            config_file.write_text("[]")
+            with self.assertRaises(ValueError):
+                bootstrap.reconcile_apps()
+
 
 if __name__ == "__main__":
     unittest.main()

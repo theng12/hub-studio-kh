@@ -184,6 +184,9 @@ final class StudioController: ObservableObject {
         workspace.onControllerJoined = { [weak self] address in
             self?.rememberController(address)
         }
+        // Leaving is the one path where the role is gone rather than changed: it closes the
+        // networks even if the Hub is not answering to report Standalone itself (0.6.256).
+        workspace.onFleetLeft = { [weak self] in self?.forgetFleetRole() }
         // This Mac's own node credential is a secret with the same lifetime as the membership, so it
         // is written to the same preferences file — which `save()` writes 0600 in a 0700 directory —
         // and cleared when this Mac leaves the group.
@@ -824,8 +827,11 @@ final class StudioController: ObservableObject {
         configuration.controllerAddress = address
         // A Mac that joins a fleet is there to serve: turn "Start services on startup" on, once.
         configuration.applyFleetServicesDefault(inFleet: configuration.isJoinedNode)
+        // Joining a group is picking a role: the Hub opens to the group's network (0.6.256).
+        let opened = address == nil ? false : configuration.followFleetNetworks()
         readFleetToken()
         do { try configuration.save() } catch { failure = error.localizedDescription }
+        if opened { noteRestartNeeded() }
     }
 
     /// Once per Mac, at launch: a Mac that already holds a controller address gets the fleet
@@ -837,13 +843,35 @@ final class StudioController: ObservableObject {
         do { try configuration.save() } catch { /* retried next launch; not startup-critical */ }
     }
 
+    /// This Mac left its group: the role is Standalone again, so the networks close (0.6.256).
+    func forgetFleetRole() {
+        configuration.lastKnownRole = "standalone"
+        let closed = configuration.leaveFleetNetworks()
+        do { try configuration.save() } catch { failure = error.localizedDescription }
+        if closed { noteRestartNeeded() }
+    }
+
     /// The Hub's own role, learned while the services run. A controller has no controller address,
     /// and a node's may predate the preference, so the running Hub is the one who knows.
     func observeFleetRole(_ role: String) {
-        fleetRoleIsMember = role == "controller" || role == "agent"
-        guard fleetRoleIsMember else { return }
-        guard configuration.applyFleetServicesDefault(inFleet: true) else { return }
+        fleetRoleIsMember = ShellConfiguration.isFleetMember(role: role)
+        // Remembered, because a controller has no controller address: without it a controller
+        // would come back from the next restart on loopback (0.6.256).
+        let roleChanged = configuration.lastKnownRole != role
+        configuration.lastKnownRole = role
+        guard fleetRoleIsMember else {
+            // Back to Standalone: the role is gone, so the networks close again (0.6.256).
+            let closed = configuration.leaveFleetNetworks()
+            if roleChanged || closed { try? configuration.save() }
+            if closed { noteRestartNeeded() }
+            return
+        }
+        // A role just picked opens this Mac's networks; picking it again does not restart anything.
+        let opened = configuration.followFleetNetworks()
+        let decided = configuration.applyFleetServicesDefault(inFleet: true)
+        guard roleChanged || opened || decided else { return }
         do { try configuration.save() } catch { /* retried at the next report */ }
+        if opened { noteRestartNeeded() }
     }
 
     /// What the Settings page, the sidebar and the Gateway all read: the actual login state, the

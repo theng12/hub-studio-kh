@@ -190,7 +190,7 @@ def app_folders(home: Path) -> list[Path]:
 
 
 def load_app_registry(path: Path) -> dict:
-    """`apps.json` - the three apps this agent may manage, by bundle identifier."""
+    """`apps.json` - the apps this agent may manage, by bundle identifier."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     apps = raw["apps"] if isinstance(raw, dict) else None
     if not isinstance(apps, dict) or not apps:
@@ -217,13 +217,18 @@ def app_config(home: Path, registry: dict) -> dict:
                 entry = registry.get(identity)
                 if entry:
                     # Same default as the Hub's own writer: Hub's row is automatic so its agent
-                    # can retry a failed download (nine Macs carried one for days, 2026-11-20).
+                    # can retry a failed download (nine Macs carried one for days, 2026-11-20),
+                    # and Relay's is automatic so the fleet installs and updates it the same way
+                    # (owner, 2026-11-21: Relay joins Hub's automatic-update path).
                     apps.setdefault(entry["app"], {"bundlePath": str(bundle.resolve()),
                                                    "recipe": entry["recipe"],
-                                                   "automatic": entry["app"] == "hub",
+                                                   "automatic": entry["app"] in ("hub", "relay"),
                                                    "bundleID": identity})
             except (OSError, ValueError, KeyError):
                 continue
+    # Relay is on no Mac yet, so its row is written even where the bundle is absent: the agent
+    # installs it from the feed, the same path a fresh feed-only app takes.
+    apps.setdefault("relay", {"bundlePath": "", "recipe": "app-dmg", "automatic": True})
     return apps
 
 
@@ -698,7 +703,7 @@ def main(argv: list[str]) -> int:
     print("  Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
           if loaded else "  Started at login: the launchd job is loaded.")
     print()
-    print("  KH Updater will keep the three apps on this Mac up to date.")
+    print("  KH Updater will keep the apps on this Mac up to date.")
     return 0
 
 

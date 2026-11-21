@@ -249,6 +249,17 @@ struct ShellConfiguration {
     /// after the attempt, so a crash mid-migration retries on the next launch instead of leaving
     /// both a login item and a launch agent in place.
     var loginMigrationComplete: Bool
+    /// The role the running Hub last reported: `controller`, `agent` or `standalone`.
+    ///
+    /// The setting belongs to the Hub; this is what the app remembers of it. It exists because a
+    /// controller has no controller address, so without it a controller would come back from a
+    /// restart on loopback (owner, 2026-11-21: a fresh install answers itself only until a role
+    /// is picked - a role already picked has to survive the restart).
+    var lastKnownRole: String?
+    /// Whether automatic listening was **chosen** - the operator's switch, `--listen-auto` or
+    /// `--fleet-mode` - rather than inherited from the default. Only a chosen automatic outranks
+    /// the role gate on a Mac with no role: an operator who says "reach me" is not overridden.
+    var listenHostChosen: Bool
     /// The exact command line the bundled service is started with.
     ///
     /// This exists because it was once wrong in a way no test caught: the app passed
@@ -325,6 +336,8 @@ struct ShellConfiguration {
         recoveryMaxAttempts = StartupRecovery.defaultMaxAutomaticAttempts
         recoveryBackoffSeconds = StartupRecovery.defaultDelays
         loginMigrationComplete = false
+        lastKnownRole = nil
+        listenHostChosen = false
         var explicitModels: URL?
         var explicitOffline = false
         var explicitHost: String?
@@ -379,18 +392,18 @@ struct ShellConfiguration {
             port = saved.port ?? Self.defaultPort
             controllerAddress = saved.controllerAddress
             loginMigrationComplete = saved.loginMigrationComplete
+            lastKnownRole = saved.lastKnownRole
+            listenHostChosen = saved.listenHostChosen ?? false
             if StartupRecovery.validPolicy(maxAttempts: saved.recoveryMaxAttempts,
                                            delays: saved.recoveryBackoffSeconds) {
                 recoveryMaxAttempts = saved.recoveryMaxAttempts
                 recoveryBackoffSeconds = saved.recoveryBackoffSeconds
             }
         }
-        // First run: answer on this Mac's private and Tailscale networks instead of loopback
-        // only. A fresh node was otherwise unreachable until its owner worked out that the Hub
-        // had to be told to listen there - the exact step that stopped it joining a controller.
-        if explicitHost == nil, readPrivateRegularFile(preferencesFile) == nil {
-            listenHost = Self.defaultListenHost()
-        }
+        // A file that already holds real addresses is a Mac that was reachable before this build —
+        // the role predates the file. An upgrade must not silently close it (0.6.256); a fresh
+        // install has only loopback here.
+        let wasReachable = listenHostAutomatic && listenHost != "127.0.0.1"
         if let explicitModels { modelsDirectory = explicitModels }
         if explicitOffline { offline = true }
         if explicitFleetMode {
@@ -400,18 +413,29 @@ struct ShellConfiguration {
             // logged in and clicked Start - which is the same class of forgotten step as the
             // Tailscale tick this release is about.
             listenHostAutomatic = true
+            listenHostChosen = true
             startAtLogin = true
             startServicesAtLogin = true
             startServicesChoiceRecorded = true
         }
-        if explicitAutomatic { listenHostAutomatic = true }
+        if explicitAutomatic {
+            listenHostAutomatic = true
+            listenHostChosen = true
+        }
         if let explicitHost {
             // Pinning an exact list is an explicit choice, so it turns automatic off: a caller
             // that named addresses meant those addresses.
             listenHost = explicitHost
             listenHostAutomatic = false
         } else if listenHostAutomatic {
-            listenHost = Self.automaticListenHost(keeping: listenHost)
+            // Automatic follows this Mac's networks only once it has a role. A fresh install
+            // answers this Mac alone until the operator picks a role or joins a group (owner,
+            // 2026-11-21: *"loopback-only until a role is picked"*); `--fleet-mode` and
+            // `--listen-auto` are the kit saying this Mac must be reachable, so they open it too.
+            listenHost = Self.automaticListenHost(
+                keeping: listenHost,
+                inFleet: controllerAddress != nil || Self.isFleetMember(role: lastKnownRole)
+                    || listenHostChosen || wasReachable)
         }
         if let explicitPort { port = explicitPort }
         // A flag is a setting, not a one-launch override. `--listen-host 127.0.0.1` used to last
@@ -434,14 +458,6 @@ struct ShellConfiguration {
             if explicitModels != nil { try Self.requireDirectory(modelsDirectory) }
         }
     }
-    /// The addresses a brand-new install should listen on: every private or Tailscale address
-    /// this Mac currently has. Loopback is always added by the Hub, so it is not listed here, and
-    /// a public address is never included.
-    static func defaultListenHost() -> String {
-        let usable = LocalAddresses.current().filter(\.isPrivate).map(\.address)
-        return usable.isEmpty ? "127.0.0.1" : usable.joined(separator: ",")
-    }
-
     /// What the listen list becomes when this Mac is allowed to answer for itself.
     ///
     /// **Derived, not remembered** (owner, 2026-11-17: *"did it store it's old assigned DHCP IP
@@ -454,12 +470,44 @@ struct ShellConfiguration {
     /// is often not up yet, so "no addresses now" is not "no addresses ever". Only then does the
     /// saved list stand in - as the set to wait for this launch, not as a way in - and the first
     /// launch that finds a real address replaces it for good.
+    ///
+    /// `inFleet` is the role gate (owner, 2026-11-21: *"loopback-only until a role is picked"*). A
+    /// Mac in no group answers itself and nothing else, however many private interfaces it has;
+    /// only picking a role or joining a group opens them. The operator's own toggle and pin still
+    /// pass `true` - an explicit "reach me" is not something this rule overrides.
     static func automaticListenHost(keeping saved: String,
-                                   current: [String] = LocalAddresses.current().filter(\.isPrivate).map(\.address)) -> String {
+                                   current: [String] = LocalAddresses.current().filter(\.isPrivate).map(\.address),
+                                   inFleet: Bool = true) -> String {
+        guard inFleet else { return "127.0.0.1" }
         let derived = current.filter { !$0.isEmpty }
         if !derived.isEmpty { return derived.joined(separator: ",") }
         let waiting = saved.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         return waiting.isEmpty ? "127.0.0.1" : waiting.joined(separator: ",")
+    }
+
+    /// Whether this role means the Mac belongs to a group: a controller runs one, a node is in one.
+    static func isFleetMember(role: String?) -> Bool { role == "controller" || role == "agent" }
+
+    /// This Mac has just been given a role or joined a group: open its private and Tailscale
+    /// addresses, unless the operator pinned an address list. Returns true when the list changed
+    /// and a restart is needed to bind it.
+    @discardableResult
+    mutating func followFleetNetworks(
+        current: [String] = LocalAddresses.current().filter(\.isPrivate).map(\.address)) -> Bool {
+        guard listenHostAutomatic else { return false }
+        let opened = Self.automaticListenHost(keeping: listenHost, current: current, inFleet: true)
+        guard opened != listenHost else { return false }
+        listenHost = opened
+        return true
+    }
+
+    /// The role is gone (this Mac is Standalone again): stop answering its networks, unless the
+    /// operator chose to be reachable. Returns true when the list changed.
+    @discardableResult
+    mutating func leaveFleetNetworks() -> Bool {
+        guard listenHostAutomatic, !listenHostChosen, listenHost != "127.0.0.1" else { return false }
+        listenHost = "127.0.0.1"
+        return true
     }
 
     /// The addresses the Hub should listen on: loopback (always added by the Hub itself) plus
@@ -713,7 +761,9 @@ struct ShellConfiguration {
                                                         nodeCredential: nodeCredential,
                                                         recoveryMaxAttempts: recoveryMaxAttempts,
                                                         recoveryBackoffSeconds: recoveryBackoffSeconds,
-                                                        loginMigrationComplete: loginMigrationComplete))
+                                                        loginMigrationComplete: loginMigrationComplete,
+                                                        lastKnownRole: lastKnownRole,
+                                                        listenHostChosen: listenHostChosen))
         try data.write(to: preferencesFile, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: preferencesFile.path)
     }
@@ -731,11 +781,10 @@ struct ShellConfiguration {
         /// or pinned to exactly `listenHost`.
         ///
         /// Absent means **automatic**, and that is a deliberate change of default rather than an
-        /// accident of decoding. A fresh install always computed its addresses from the machine
-        /// (`defaultListenHost()`), but the moment anything was saved they froze — so a Mac whose
-        /// owner never opened Connections, or who set it up before it joined a tailnet, stayed on
-        /// loopback (or on a LAN address from a network it had since left) forever. The owner
-        /// asked for the tailnet to be on without having to remember it.
+        /// accident of decoding. A Mac whose owner set it up before it joined a tailnet used to
+        /// stay on a LAN address from a network it had since left forever; automatic follows the
+        /// interfaces this Mac has now. Automatic still needs a role: a Mac in no group answers
+        /// itself only (owner, 2026-11-21: "loopback-only until a role is picked").
         ///
         /// Automatic is **derived**: the list is recomputed from this Mac's interfaces at every
         /// launch, so a lease it has left behind does not survive (owner, 2026-11-17: a Mac had
@@ -761,13 +810,21 @@ struct ShellConfiguration {
         /// Absent in every preferences file written before the launch agent replaced the login
         /// item, and absent means the one-time migration has not run yet.
         let loginMigrationComplete: Bool
+        /// The Hub's last reported role; absent on a fresh install and on every file written
+        /// before this field existed, which is the same as "no role picked yet".
+        let lastKnownRole: String?
+        /// Whether automatic listening was chosen explicitly; absent means it was not, and the
+        /// role gate applies.
+        let listenHostChosen: Bool?
 
         init(modelsPath: String, offline: Bool, startAtLogin: Bool, startServicesAtLogin: Bool,
              startServicesChoiceRecorded: Bool?, listenHost: String, listenHostAutomatic: Bool?, port: Int?, controllerAddress: String?,
              nodeCredential: String?,
              recoveryMaxAttempts: Int,
              recoveryBackoffSeconds: [TimeInterval],
-             loginMigrationComplete: Bool) {
+             loginMigrationComplete: Bool,
+             lastKnownRole: String?,
+             listenHostChosen: Bool?) {
             self.modelsPath = modelsPath
             self.offline = offline
             self.startAtLogin = startAtLogin
@@ -781,6 +838,8 @@ struct ShellConfiguration {
             self.recoveryMaxAttempts = recoveryMaxAttempts
             self.recoveryBackoffSeconds = recoveryBackoffSeconds
             self.loginMigrationComplete = loginMigrationComplete
+            self.lastKnownRole = lastKnownRole
+            self.listenHostChosen = listenHostChosen
         }
 
         init(from decoder: Decoder) throws {
@@ -807,6 +866,8 @@ struct ShellConfiguration {
                 ?? StartupRecovery.defaultDelays
             // Absent means the migration has not run, which is the state an upgrade starts in.
             loginMigrationComplete = try values.decodeIfPresent(Bool.self, forKey: .loginMigrationComplete) ?? false
+            lastKnownRole = try values.decodeIfPresent(String.self, forKey: .lastKnownRole)
+            listenHostChosen = try values.decodeIfPresent(Bool.self, forKey: .listenHostChosen)
         }
     }
 

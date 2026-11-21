@@ -195,6 +195,7 @@ def app_config(home: Path, kit: Path) -> dict:
     apps = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False}}
     known = {"local.studiohub.standalone": ("hub", "hub"),
              "kh.gateway.menubar": ("gateway", "gateway"),
+             "kh.relay.desktop": ("relay", "app-dmg"),
              "com.storystudio.kh": ("story", "story"),
              "com.storystudio.desktop": ("story", "story")}
     # ponytail: discover standard per-user/system Applications folders; add an explicit path
@@ -216,10 +217,15 @@ def app_config(home: Path, kit: Path) -> dict:
                     # `download_failed` from 12.6 h to 3.2 days (2026-11-20). The transfer
                     # resumes a `.part`; it only needs an attempt. The owner's Launcher setting
                     # still governs installs, and Hub ships the hold/settle/resume contract.
+                    # **Relay's row is automatic too** (owner, 2026-11-21: Relay joins Hub's
+                    # automatic-update path). Relay 0.3.33 is installed on no Mac, so a row is
+                    # written below even when the bundle is not here; without that, nothing ever
+                    # offers it and the feed entry sits uninstalled.
                     apps.setdefault(app, {"bundlePath": str(bundle.resolve()), "recipe": recipe,
-                                          "automatic": app == "hub", "bundleID": identity})
+                                          "automatic": app in ("hub", "relay"), "bundleID": identity})
             except (OSError, ValueError, KeyError):
                 continue
+    apps.setdefault("relay", {"bundlePath": "", "recipe": "app-dmg", "automatic": True})
     return apps
 
 
@@ -393,12 +399,42 @@ class Bootstrap:
         if result.returncode:
             raise ValueError("launchd did not start KH Updater")
 
+    def reconcile_apps(self) -> bool:
+        """Add app rows this Hub now manages to an already-enrolled config.
+
+        The table is written at enrolment, so a Mac enrolled by an older Hub never hears about an
+        app this one added - which is how Relay (2026-11-21) would have stayed on the feed and off
+        every Mac. Existing rows are kept exactly as they are: an automatic choice already saved
+        here is the owner's, not this function's to re-decide. Returns true when it wrote.
+        """
+        config_file = self.base / "config.json"
+        if not config_file.is_file():
+            return False
+        saved = json.loads(config_file.read_text())
+        if not isinstance(saved, dict):
+            # A file the updater itself would refuse reaches the same handler as any other
+            # reconcile failure, instead of an AttributeError nobody catches.
+            raise ValueError("the agent config is not an object")
+        known = saved.get("apps") if isinstance(saved.get("apps"), dict) else {}
+        missing = {app: row for app, row in app_config(self.home, self.kit).items()
+                   if app not in known}
+        if not missing:
+            return False
+        private_json(config_file, {**saved, "apps": {**known, **missing}})
+        return True
+
 
 async def check_once(bootstrap: Bootstrap, machine: str) -> dict:
     try:
         state = await asyncio.to_thread(bootstrap.install)
         enrolment = await bootstrap.enrol(machine)
         await asyncio.to_thread(bootstrap.activate)
+        try:
+            await asyncio.to_thread(bootstrap.reconcile_apps)
+        except (OSError, ValueError):
+            # A failed table update is not a failed install: the agent runs, and the next five-
+            # minute check tries again.
+            log.warning("KH Updater app table not updated; the next check will try again.")
         if enrolment == "re-enrolled":
             answer = {"state": state, "tokenRejected": True,
                       "detail": "The publisher had dropped this Mac's token; KH Updater enrolled again."}

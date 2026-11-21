@@ -1,11 +1,11 @@
 """The Connections page's "follow this Mac's networks" setting, and the manual choice that ends it.
 
-The owner's ask: *"i keep forgetting to turn on tailscale. i want it already the default on."*
-`ShellConfiguration.listenHostAutomatic` is the preference (absent means automatic), and
-`ShellConfiguration.automaticListenHost(keeping:)` is the recomputation — this Mac's current private
-and Tailscale addresses, added to whatever was already saved, so automatic can never remove a way in
-that worked. The Kit behaviours are pinned in `tests/native/main.swift`, which compiles the real
-configuration type.
+The owner's ask: *"i keep forgetting to turn on tailscale. i want it already the default on."* —
+superseded on 2026-11-21 by *"loopback-only until a role is picked"*: automatic is still the
+preference (absent means automatic), and `ShellConfiguration.automaticListenHost(keeping:inFleet:)`
+is the recomputation of this Mac's current private and Tailscale addresses — but it leaves them
+closed until the Mac has a role. The Kit behaviours are pinned in `tests/native/main.swift`, which
+compiles the real configuration type.
 
 What this module pins is the *page*: a setting that changes by itself has to be visible and
 switchable, and — the defect that would be invisible until the next launch — a manual address
@@ -39,9 +39,12 @@ class ListenAutomaticUITests(unittest.TestCase):
     def test_the_page_says_what_automatic_means(self) -> None:
         """A setting that changes by itself must say so, in one line, where it is set."""
         connections = body(VIEWS, "private var fleetSection: some View")
+        # The page must also say what the role gate does (owner, 2026-11-21: loopback-only until
+        # a role is picked), or "automatic" would read as "open from the first launch".
         self.assertIn(
-            "Loopback and every private or Tailscale address this Mac has, recomputed each time "
-            "it starts. Never a public address.",
+            "Every private or Tailscale address this Mac has, recomputed each time it starts — "
+            "once this Mac is a controller or a node, or now that you have switched this on. "
+            "Never a public address. Until then it answers this Mac only.",
             connections, "the automatic list must be explained where the operator can read it")
         self.assertIn("listenHostAutomatic {", connections,
                       "the sentence must appear only while automatic is on")

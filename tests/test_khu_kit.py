@@ -562,7 +562,10 @@ class InstallerTests(unittest.TestCase):
                 # (nine Macs carried one for days, 2026-11-20). Both writers agree, not just Hub's.
                 "hub": {"bundlePath": str((self.home / "Applications/Hub Studio KH.app").resolve()),
                         "recipe": "hub", "automatic": True,
-                        "bundleID": "local.studiohub.standalone"}}
+                        "bundleID": "local.studiohub.standalone"},
+                # Relay joins the same path, and its row is written before the bundle exists:
+                # nobody has Relay installed yet, so the feed is the only way it arrives.
+                "relay": {"bundlePath": "", "recipe": "app-dmg", "automatic": True}}
         expected = json.dumps({"feedURL": self.descriptor_value("feedURL"),
                                "publicKey": self.publisher.public_b64, "machine": "fixture-mac",
                                "token": self.publisher.token, "stateDir": str(root / "state"),
@@ -812,7 +815,9 @@ class BothPathsAgreeTests(unittest.TestCase):
         mine = run_import("app_config", home, json.loads((KIT_SOURCE / APPS).read_text())["apps"])
         theirs = hub.app_config(home, home)
         self.assertEqual(mine, theirs)
-        self.assertEqual(sorted(theirs), ["gateway", "hub", "story", "updater"])
+        self.assertEqual(sorted(theirs), ["gateway", "hub", "relay", "story", "updater"])
+        # Relay is managed on every Mac, installed or not (owner, 2026-11-21: R1).
+        self.assertEqual(theirs["relay"], {"bundlePath": "", "recipe": "app-dmg", "automatic": True})
 
     def test_the_first_run_leaves_the_same_state_as_the_hub(self) -> None:
         """`install` returns the same word and the same on-disk result for the same inputs."""
