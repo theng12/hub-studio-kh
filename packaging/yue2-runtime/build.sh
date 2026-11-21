@@ -108,6 +108,9 @@ rsync -a --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude '*
 find "$OUTPUT_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 find "$OUTPUT_DIR" -depth -type d -name __pycache__ -empty -delete
 "$PYTHON" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" normalize-shebangs "$OUTPUT_DIR"
+# Build-state files (`uv_cache.json`, `BUILD`, `.DS_Store`) record where the tree was made, not
+# what it contains; they go before the RECORD rewrite so no record describes a file that is gone.
+"$PYTHON" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" prune-build-junk "$OUTPUT_DIR"
 # The shebang rewrite invalidates the hashes uv recorded, and the pre-rewrite scripts embedded the
 # absolute build path — so without this the same runtime built at two paths has two digests.
 "$PYTHON" -I -B "$PROJECT_ROOT/packaging/video-runtime/normalize_records.py" "$OUTPUT_DIR"

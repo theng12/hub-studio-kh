@@ -33,6 +33,13 @@ def rewrite(site_packages: Path) -> int:
                 continue
             relative, _digest, _size = parts
             target = site_packages / relative
+            if target.resolve() == record.resolve():
+                # A RECORD cannot hash itself; an empty self-entry is standard and is what keeps
+                # two builds of the same packages byte-identical at different paths.
+                rebuilt = f"{relative},,"
+                output.append(rebuilt)
+                touched = touched or rebuilt != line
+                continue
             if not target.is_file() or target.is_symlink():
                 output.append(line)
                 continue
