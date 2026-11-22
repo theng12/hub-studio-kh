@@ -444,32 +444,6 @@ class RuntimeTestOnlyContentTests(unittest.TestCase):
             manifest.parent.chmod(0o755)
             manifest.chmod(0o644)
 
-    def test_sweep_removes_generated_bytecode_and_its_empty_pycache(self):
-        # A spawn that ran the runtime's own interpreter without -B rewrites __pycache__ after the
-        # build's sweep, and each .pyc names the build path (0.6.257 run 1 failed no-home-path on
-        # six). The bundle boundary must remove them, not only test files.
-        packaging = load_packager()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = self.staged_runtime(Path(temporary))
-            cache = root / "lib" / "python3.12" / "site-packages" / "numpy" / "__pycache__"
-            cache.mkdir()
-            compiled = cache / "__init__.cpython-312.pyc"
-            compiled.write_bytes(b"\x00/Users/builder/work/.build/voice-runtime\x00")
-            packaging.write_file_manifest(root)
-
-            removed = packaging.strip_test_only(root)["removed"]
-
-            self.assertIn(
-                "lib/python3.12/site-packages/numpy/__pycache__/__init__.cpython-312.pyc",
-                removed,
-            )
-            self.assertFalse(compiled.exists())
-            self.assertFalse(cache.exists())  # the emptied __pycache__ directory goes too
-            self.assertEqual(packaging.verify_file_manifest(root), [])
-            self.assertNotIn(
-                "__pycache__", (root / "manifest" / "runtime-files.json").read_text()
-            )
-
     def test_sweep_works_on_a_read_only_staged_runtime(self):
         packaging = load_packager()
         with tempfile.TemporaryDirectory() as temporary:
@@ -530,29 +504,28 @@ class RuntimeTestOnlyContentTests(unittest.TestCase):
 class RuntimeNormalizationTests(unittest.TestCase):
     """The recipe step that made a runtime's digest its content instead of its build path."""
 
-    def test_prune_build_junk_removes_markers_and_keeps_code(self):
+    def test_build_junk_check_names_leftovers_without_modifying_them(self):
         packaging = load_packager()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "lib" / "pkg-1.0.dist-info").mkdir(parents=True)
-            (root / "lib" / "__pycache__").mkdir()
-            (root / "lib" / "used" / "__pycache__").mkdir(parents=True)
-            (root / "lib" / "used" / "__pycache__" / "state.json").write_text("{}")
-            for name in ("lib/.DS_Store", "lib/pkg-1.0.dist-info/uv_cache.json",
-                         "lib/pkg-1.0.dist-info/BUILD", "lib/mod.pyc", "lib/keep.py"):
-                (root / name).write_text("x")
+            code = root / "keep.py"
+            code.write_text("# runtime source")
+            with mock.patch("sys.argv", [str(PACKAGER), "check-build-junk", str(root)]):
+                self.assertEqual(packaging.main(), 0)
+                junk = (".DS_Store", "._keep.py", "dist-info/uv_cache.json", "dist-info/BUILD",
+                        "__pycache__/mod.pyc", "legacy.pyo")
+                for name in junk:
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name)
 
-            removed = packaging.prune_build_junk(root)
+                self.assertEqual(packaging.build_junk_hits(root), sorted((*junk, "__pycache__")))
+                with self.assertRaisesRegex(RuntimeError, r"dist-info/uv_cache\.json"):
+                    packaging.main()
 
-            self.assertTrue((root / "lib" / "keep.py").is_file())
-            self.assertIn("lib/__pycache__", removed)
-            self.assertIn("lib/mod.pyc", removed)
-            for name in ("lib/.DS_Store", "lib/pkg-1.0.dist-info/uv_cache.json",
-                         "lib/pkg-1.0.dist-info/BUILD"):
-                self.assertIn(name, removed)
-                self.assertFalse((root / name).exists())
-            self.assertTrue((root / "lib" / "used" / "__pycache__").is_dir(),
-                            "a cache directory that still holds something is not junk")
+            for name in junk:
+                self.assertEqual((root / name).read_text(), name)
+            self.assertEqual(code.read_text(), "# runtime source")
 
     def test_normalize_records_clears_the_self_entry_and_hashes_content(self):
         packaging = load_packager()

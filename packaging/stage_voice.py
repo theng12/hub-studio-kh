@@ -52,7 +52,7 @@ RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
 # **Re-qualified 2026-11-21.** The previous pin was a *build-path* identity: each `RECORD` was
 # written before the shebang rewrite, so the same packages built in two checkouts had two digests
 # and no second path could ever match. The recipe now rewrites every RECORD after the rewrite and
-# prunes build junk (`runtime_packaging.py normalize-records` / `prune-build-junk`); this value is
+# leaves out build junk (`runtime_packaging.py normalize-records` / `check-build-junk`); this value is
 # what it produces, proven at two checkout paths (one identical digest) and by a real generation
 # (512x512 FLUX.2 Klein picture, sha256 c80795c570c0a6b8f9d8f951fb6958135352a615c8344127ebc74468b61e14ba,
 # evidence in Hub Lead 004's receipt). The previous value stays in git history.
@@ -194,6 +194,16 @@ def tree_digest(root: Path, exclude: set[Path] | None = None) -> str:
                     digest.update(chunk)
             digest.update(b'\0')
     return digest.hexdigest()
+
+
+_RUNTIME_COPY_EXCLUDES = ('.DS_Store', '._*', '__pycache__', '*.pyc', '*.pyo')
+_ignore_runtime_metadata = shutil.ignore_patterns(*_RUNTIME_COPY_EXCLUDES)
+
+
+def runtime_input_digest(root: Path) -> str:
+    # Check against the same content the bundle receives, without editing the input tree.
+    return tree_digest(root, exclude={path.relative_to(root)
+                                     for pattern in _RUNTIME_COPY_EXCLUDES for path in root.rglob(pattern)})
 
 
 def _thin_signature_spans(stream, offset: int, length: int) -> list[tuple[int, int]]:
@@ -728,7 +738,7 @@ def _stage_music(context: dict) -> dict | None:
     # to `components.music`; nothing else read it.
     yue2_note = {}
     if context.get('yue2_runtime') is not None:
-        yue2_found = tree_digest(context['yue2_runtime'])
+        yue2_found = runtime_input_digest(context['yue2_runtime'])
         yue2_reason = context.get('unqualified_yue2_runtime')
         if yue2_found != YUE2_RUNTIME_SHA256 and not yue2_reason:
             raise SystemExit(
@@ -741,7 +751,8 @@ def _stage_music(context: dict) -> dict | None:
                 'MLX 0.32.2,\n'
                 '  pass --yue2-runtime .build/yue2-runtime, or update this pin with the '
                 'qualification that moved it.')
-        shutil.copytree(context['yue2_runtime'], resources / 'runtimes/music-yue2', symlinks=True)
+        shutil.copytree(context['yue2_runtime'], resources / 'runtimes/music-yue2',
+                        symlinks=True, ignore=_ignore_runtime_metadata)
         # The bridge runs *inside* that runtime, so it is staged beside it rather than inside the
         # worker's own tree: `generation.yue2_runtime_python()` finds the interpreter, and the
         # bridge is spawned from the worker's component directory.
@@ -759,7 +770,7 @@ def _stage_music(context: dict) -> dict | None:
 def _stage_image(context: dict) -> dict | None:
     if context['image_runtime'] is None:
         return None
-    found = tree_digest(context['image_runtime'])
+    found = runtime_input_digest(context['image_runtime'])
     unqualified_reason = context.get('unqualified_image_runtime')
     if found != IMAGE_RUNTIME_SHA256 and not unqualified_reason:
         known = IMAGE_RUNTIME_SUPERSEDED.get(found)
@@ -780,7 +791,8 @@ def _stage_image(context: dict) -> dict | None:
     resources = context['resources']
     image_source = resources / 'components/image'
     copy_tracked_tree(ROOT / 'components/image', image_source)
-    shutil.copytree(context['image_runtime'], resources / 'runtimes/image', symlinks=True)
+    shutil.copytree(context['image_runtime'], resources / 'runtimes/image',
+                    symlinks=True, ignore=_ignore_runtime_metadata)
     shutil.copyfile(ROOT / 'packaging/image_worker.py', resources / 'image_worker.py')
     provenance = context['image_provenance']
     matched = {'runtime_qualified': True} if found == IMAGE_RUNTIME_SHA256 else {
@@ -1181,7 +1193,8 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
     # Keep the app's existing resource name; CHANGELOG.md is the only authored release text.
     (resources / 'release-notes.md').write_text(
         release_notes_text((ROOT / 'CHANGELOG.md').read_text(encoding='utf-8'), version), encoding='utf-8')
-    shutil.copytree(runtime, resources / 'runtimes/voice', symlinks=True)
+    shutil.copytree(runtime, resources / 'runtimes/voice',
+                    symlinks=True, ignore=_ignore_runtime_metadata)
     # Nothing in the product runs a dependency's tests or pytest, and both were in 0.6.200's
     # bundle. Removed here, at the staging step, so a reused `.build/voice-runtime` cannot smuggle
     # them in; the runtime's own `manifest/runtime-files.json` is rewritten to match what ships.

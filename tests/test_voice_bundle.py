@@ -618,7 +618,13 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(hub['khu_agent']['agent_version'], '0.0.1')
         self.assertRegex(hub['khu_agent']['kit_manifest_sha256'], r'^[0-9a-f]{64}$')
 
-    def _native_stage(self, image=True, yue2=True, video=False, expect_refusal=False, khu=False):
+    def test_runtime_copies_exclude_generated_files_without_mutating_source(self):
+        manifest = self._native_stage(generated_files=True)
+        self.assertIs(manifest['components']['image']['runtime_qualified'], True)
+        self.assertIs(manifest['components']['music']['yue2_runtime_qualified'], True)
+
+    def _native_stage(self, image=True, yue2=True, video=False, expect_refusal=False, khu=False,
+                      generated_files=False):
         spec = importlib.util.spec_from_file_location('stage_voice', ROOT / 'packaging/stage_voice.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -689,6 +695,19 @@ class StagingTests(unittest.TestCase):
             runtime = base / 'runtime'
             (runtime / 'bin').mkdir(parents=True)
             (runtime / 'bin/python3').write_text('#!/bin/sh\n')
+            if generated_files:
+                clean_digest = module.tree_digest(runtime)
+                (runtime / '.DS_Store').write_bytes(b'Finder metadata')
+                (runtime / 'bin/._python3').write_bytes(b'AppleDouble metadata')
+                cache = runtime / 'bin/__pycache__'
+                cache.mkdir()
+                (cache / 'module.cpython-312.pyc').write_bytes(b'\0/Users/builder/work/.build/runtime\0')
+                (runtime / 'bin/legacy.pyc').write_bytes(b'legacy bytecode')
+                (runtime / 'bin/legacy.pyo').write_bytes(b'legacy optimized bytecode')
+                source_digest = module.tree_digest(runtime)
+                self.assertNotEqual(source_digest, clean_digest)
+                self.enterContext(mock.patch.multiple(
+                    module, IMAGE_RUNTIME_SHA256=clean_digest, YUE2_RUNTIME_SHA256=clean_digest))
             native = base / 'StudioHub'
             native.write_bytes(b'native-shell')
             native.chmod(0o755)
@@ -753,13 +772,13 @@ class StagingTests(unittest.TestCase):
                         stage_kwargs.update({'khu_agent_kit': kit,
                                              'khu_publisher_json': publisher})
                     if image:
-                        stage_kwargs.update({
-                            'image_runtime': runtime,
-                            'unqualified_image_runtime': 'synthetic staging fixture'})
+                        stage_kwargs['image_runtime'] = runtime
+                        if not generated_files:
+                            stage_kwargs['unqualified_image_runtime'] = 'synthetic staging fixture'
                     if yue2:
-                        stage_kwargs.update({
-                            'yue2_runtime': runtime,
-                            'unqualified_yue2_runtime': 'synthetic staging fixture'})
+                        stage_kwargs['yue2_runtime'] = runtime
+                        if not generated_files:
+                            stage_kwargs['unqualified_yue2_runtime'] = 'synthetic staging fixture'
                     if video:
                         stage_kwargs.update({
                             'video_runtime': runtime,
@@ -779,6 +798,15 @@ class StagingTests(unittest.TestCase):
                 except TypeError as exc:
                     self.fail(f'stage must accept native_shell: {exc}')
             contents = artifact / 'Contents'
+            if generated_files:
+                self.assertEqual(module.tree_digest(runtime), source_digest)
+                for name in ('voice', 'image', 'music-yue2'):
+                    with self.subTest(runtime=name):
+                        staged_runtime = contents / 'Resources/runtimes' / name
+                        self.assertEqual((staged_runtime / 'bin/python3').read_bytes(), b'#!/bin/sh\n')
+                        for pattern in ('.DS_Store', '._*', '__pycache__', '*.pyc', '*.pyo'):
+                            self.assertFalse(list(staged_runtime.rglob(pattern)), pattern)
+                        self.assertEqual(module.tree_digest(staged_runtime), clean_digest)
             self.assertEqual((contents / 'MacOS/Hub Studio KH').read_bytes(), b'native-shell')
             self.assertTrue(os.access(contents / 'MacOS/Hub Studio KH', os.X_OK))
             self.assertTrue((contents / 'MacOS/StudioHubService').is_file())
@@ -834,7 +862,8 @@ class StagingTests(unittest.TestCase):
                 self.assertIn('source_sha256', manifest['components'][name])
             if image:
                 self.assertEqual(manifest['components']['image']['upstream_commit'], 'e' * 40)
-                self.assertEqual(manifest['components']['image']['runtime_sha256'], module.tree_digest(runtime))
+                self.assertEqual(manifest['components']['image']['runtime_sha256'],
+                                 clean_digest if generated_files else module.tree_digest(runtime))
                 self.assertTrue((contents / 'Resources/image_worker.py').is_file())
                 self.assertTrue((contents / 'Resources/components/image/app/backend/main.py').is_file())
                 self.assertTrue((contents / 'Resources/runtimes/image/bin/python3').is_file())

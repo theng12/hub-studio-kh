@@ -99,8 +99,8 @@ while IFS= read -r -d '' cache; do
   mkdir -p "$CACHE_TRASH/$(dirname "$relative")"
   mv "$cache" "$CACHE_TRASH/$relative"
 done < <(find "$STAGE" -depth -type d -name __pycache__ -empty -print0)
-"$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" prune-build-junk "$STAGE"
-# After the shebang rewrite and the junk prune, so the RECORDs describe the final tree and the
+"$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" check-build-junk "$STAGE"
+# After the shebang rewrite and the junk check, so the RECORDs describe the final tree and the
 # digest is a content identity rather than a build-path identity (see normalize_record_files).
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" normalize-records "$STAGE"
 "$STAGE/bin/python3" -I -B "$PROJECT_ROOT/packaging/voice-runtime/runtime_packaging.py" audit "$STAGE" \
