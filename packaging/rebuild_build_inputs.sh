@@ -185,7 +185,14 @@ fi
 # Delegates to the tracked builder; only the pinned source checkout it requires is fetched here.
 if wanted yue2-runtime; then
   echo "== yue2-runtime =="
-  yue2_ok() { [[ -x "$1/bin/python3" && -d "$1/lib/mlx-yue-source" ]]; }
+  # A tree is finished only if the builder's last steps ran: the sysconfig it generates must carry
+  # no home path (neutralize_prefix.py rewrites the build user out of it). Two directories alone
+  # accepted a build whose log stopped after `uv pip install`, and that tree shipped `/Users/<name>`
+  # 21 times and was then pinned as the qualified runtime (hub gate run 9, 2026-11-24).
+  yue2_ok() {
+    [[ -x "$1/bin/python3" && -d "$1/lib/mlx-yue-source" ]] || return 1
+    ! grep -q "/Users/" "$1/lib/python3.12/_sysconfigdata__darwin_darwin.py" 2>/dev/null
+  }
 
   # The builder ends with `chmod -R a-w`, and renaming a non-writable directory is refused. The
   # digest does not read permission bits (stage_voice.tree_digest: "Content only, deliberately not
