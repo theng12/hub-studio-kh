@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source": {
-    "repository": "/build/pinokio/api/studiohub-mac",
+    "repository": "~/pinokio/api/studiohub-mac",
     "commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
     "version": "2.22.0",
     "read_only": true

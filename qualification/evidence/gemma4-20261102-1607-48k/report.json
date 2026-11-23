@@ -3,7 +3,7 @@
   "suite_profile_version": 2,
   "status": "fail",
   "suite": "long-context",
-  "model_dir": "/build/StudioHubModels/gemma4-26b-a4b-qat-4bit/0e3cbab38ce568cf6e23543010d08d03b731910c/model",
+  "model_dir": "~/StudioHubModels/gemma4-26b-a4b-qat-4bit/0e3cbab38ce568cf6e23543010d08d03b731910c/model",
   "started_at": 1793591854.656482,
   "environment": {
     "python": "3.12.14",
@@ -19,7 +19,7 @@
     "physical_ram_bytes": 34359738368,
     "physical_ram_tier_gib": 32,
     "available_memory_bytes_at_start": 27871461376,
-    "available_memory_source": "/build/Desktop/Gemma 4 long-context test/moe-support/components/host_memory.py"
+    "available_memory_source": "~/Desktop/Gemma 4 long-context test/moe-support/components/host_memory.py"
   },
   "cache_limit_bytes": 512000000,
   "cache_limit_source": "configured: components/voice/app/backend/mlx_memory.py CACHE_LIMIT_MB=512; not measured RAM, throughput, or an admission floor",

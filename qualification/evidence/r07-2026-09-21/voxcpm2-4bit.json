@@ -1,6 +1,6 @@
 {
-  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-clean/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "app": "~/Developer/studio-hub-kh/.build/StudioHub-clean/Studio Hub.app",
+  "models_dir": "~/StudioHubModels",
   "model": "mlx-community/VoxCPM2-4bit",
   "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
   "reference": {

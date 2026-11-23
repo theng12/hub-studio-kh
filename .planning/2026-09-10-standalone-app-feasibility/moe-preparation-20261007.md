@@ -4,7 +4,7 @@ Status: in progress, not released or installed. Owner authorized wiring, downloa
 
 Goal: stock the three exact owner-selected checkpoints and prepare manifest-driven Chat selection with one resident model, explicit pending admission, and truthful loading/prefill/decode telemetry.
 
-Spec: /build/Developer/_orchestra/audit-20261007/moe-qualification/PREPARATION.md. Canonical plan extension, not a new planning system. Base4e4e3a5 /0.6.152; isolated study/moe-24-32gb-20261007 worktree. Nemotron3.5 Lightning30B-A3B MLX4-bit has independently verified all11 canonical file SHA256s. Qwen3.6 35B-A3B MLX4-bit is downloading second; Gemma4 26B-A4B QAT MLX4-bit third. No inference, baseline, benchmark, candidate activation, app restart or fleet rollout in preparation checks. 32 GiB alone sufficient; English only. Keep all3 on all4 SSDs regardless of qualification results.
+Spec: ~/Developer/_orchestra/audit-20261007/moe-qualification/PREPARATION.md. Canonical plan extension, not a new planning system. Base4e4e3a5 /0.6.152; isolated study/moe-24-32gb-20261007 worktree. Nemotron3.5 Lightning30B-A3B MLX4-bit has independently verified all11 canonical file SHA256s. Qwen3.6 35B-A3B MLX4-bit is downloading second; Gemma4 26B-A4B QAT MLX4-bit third. No inference, baseline, benchmark, candidate activation, app restart or fleet rollout in preparation checks. 32 GiB alone sufficient; English only. Keep all3 on all4 SSDs regardless of qualification results.
 
 ## Frozen contracts
 

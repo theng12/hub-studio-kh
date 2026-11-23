@@ -1,6 +1,6 @@
 {
   "app": "/Applications/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "models_dir": "~/StudioHubModels",
   "model": "AITRADER/FLUX2-klein-4B-mlx-4bit",
   "prompt": "A quiet riverside garden at sunrise, soft mist over the water, green trees, natural light, photographic detail.",
   "params": {

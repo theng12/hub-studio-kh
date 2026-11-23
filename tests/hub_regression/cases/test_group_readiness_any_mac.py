@@ -28,7 +28,7 @@ def _studio(machine: str) -> dict:
 
 class _Monitor:
     def __init__(self, cached_on: set[str]):
-        self.registry = [_studio("local"), _studio("studio-mac-1504")]
+        self.registry = [_studio("local"), _studio("mac-1504")]
         self.status = {studio["id"]: {"status": "up"} for studio in self.registry}
         self.rows = {studio["id"]: dict(ROW, cache={"state": "cached" if studio["machine"] in cached_on
                                                          else "not_installed"})
@@ -90,10 +90,10 @@ def _dispatched_to(monkeypatch) -> list[str]:
 
 
 def test_a_model_only_a_joined_mac_has_is_accepted_and_runs_there(group, monkeypatch):
-    monitor = group({"studio-mac-1504"}, controller_ready=False)
+    monitor = group({"mac-1504"}, controller_ready=False)
     envelope = {"modality": "voice", "model": MODEL}
     assert standalone._submission_readiness(envelope, monitor) is None
-    assert _dispatched_to(monkeypatch) == ["voice@studio-mac-1504"]
+    assert _dispatched_to(monkeypatch) == ["voice@mac-1504"]
 
 
 def test_a_model_on_the_controller_still_works(group, monkeypatch):
@@ -109,12 +109,12 @@ def test_a_group_where_no_mac_has_it_is_refused(group):
 
 
 def test_a_joined_mac_below_the_ram_floor_or_not_runtime_ready_does_not_count(group, monkeypatch):
-    monitor = group({"studio-mac-1504"}, controller_ready=False)
+    monitor = group({"mac-1504"}, controller_ready=False)
     monkeypatch.setattr(broker, "_host_for_studio",
                         lambda studio: {"total_gb": 8.59, "available_gb": 4.0})
     envelope = {"modality": "voice", "model": MODEL}
     assert standalone._submission_readiness(envelope, monitor)["code"] == "MODEL_NOT_READY"
     monkeypatch.setattr(broker, "_host_for_studio",
                         lambda studio: {"total_gb": 17.18, "available_gb": 12.0})
-    monitor.rows["voice@studio-mac-1504"]["runtime_ready"] = False
+    monitor.rows["voice@mac-1504"]["runtime_ready"] = False
     assert standalone._submission_readiness(envelope, monitor)["code"] == "MODEL_NOT_READY"

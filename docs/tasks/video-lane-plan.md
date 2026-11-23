@@ -114,8 +114,8 @@ as the existing per-model capacity weighting.
    * 16 GB → LTX (I2V + T2V) and Lance (T2V): does the vendor claim hold?
    * 8 GB → Lance only, at 256² first: **does it actually fit, or does it swap?** This is the single
      most valuable number in the whole plan, because ~35 of the owner's ~50 machines are 8 GB.
-   Candidates reachable on 2026-09-26: `studio-mac-1201-m2-16-256-hub` (M2, 16 GB),
-   `studio-mac-1204-m1-16-512-hub` (M1, 16 GB). Needs either shell access to those Macs or the lane
+   Candidates reachable on 2026-09-26: `mac-1201-m2-16-256-hub` (M2, 16 GB),
+   `mac-1204-m1-16-512-hub` (M1, 16 GB). Needs either shell access to those Macs or the lane
    dispatching a real job to them — which is what step 2 makes possible.
 
 ## What this does not do

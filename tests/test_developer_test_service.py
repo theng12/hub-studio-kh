@@ -38,8 +38,8 @@ try:
 except Exception:  # pragma: no cover - schema checks are skipped only when unavailable
     jsonschema = None
 
-AUTHORITY = Path("/build/Developer/_orchestra/developer-mode-20261105/"
-                 "developer-test-v1-candidate2.schema.json")
+AUTHORITY = Path("~/Developer/_orchestra/developer-mode-20261105/"
+                 "developer-test-v1-candidate2.schema.json").expanduser()
 
 FAKE_CHILD = r'''
 import argparse, json, os, struct, sys, time, zlib

@@ -7,23 +7,23 @@ swap now: total = 2048.00M  used = 987.94M  free = 1060.06M  (encrypted)
 runtime:  /Applications/Studio Hub.app/Contents/Resources/runtimes/video/bin/python3
           3.11.16 mlx 0.32.2
 hub:      /Applications/Studio Hub.app/Contents/Resources
-model:    ltx-2-3-22b-ram-12gb-mlx (LTX-2.3 22B RAM-12GB, mixed 2-8 bit) in /build/StudioHubModels
+model:    ltx-2-3-22b-ram-12gb-mlx (LTX-2.3 22B RAM-12GB, mixed 2-8 bit) in ~/StudioHubModels
 tier:     24 GB published minimum, 32 GB recommended
 
-door:     image-to-video (/build/Developer/studio-hub-kh/qualification/scene.png)
+door:     image-to-video (~/Developer/studio-hub-kh/qualification/scene.png)
 
 starting. this can take a long time; the log is kept either way.
 
 accepted e9caa8c4ce2a4074a29d2349a99193ce (running)
   running preparing 2%
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] ...
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] done in 3.4s
 [Encoding prompt] ...
 [Encoding prompt] done in 12.1s
 [Loading transformer (transformer-distilled.safetensors)] ...
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
   Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
 [Loading transformer (transformer-distilled.safetensors)] done in 3.4s
 [estimate] denoising: 8 steps x 1 passes over 1008 video + 51 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
@@ -47,8 +47,8 @@ warning: no transformer config (embedded_config.json / config.json) found in /bu
   "wall_seconds": 257.9852569103241,
   "peak_footprint_bytes": 16919438528,
   "peak_mlx_bytes": 10046030772,
-  "artifact": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
-  "results": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554"
+  "artifact": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
+  "results": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554"
 }
 
 ----- what the lane recorded -----
@@ -58,11 +58,11 @@ wall seconds:      257.9852569103241
 peak MLX bytes:    10046030772
 peak footprint:    16919438528
 resolution:        1024x576 x 49 frames
-artifact:          /build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4
+artifact:          ~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4
   duration:        2.0416666666666665 s
   tracks:          1 video, 1 audio
 
-Results folder: /build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554
+Results folder: ~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554
 Send that folder back (or just its measurement.json) and nothing else is needed.
 Nothing was installed, moved or deleted.
 

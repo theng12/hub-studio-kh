@@ -1,20 +1,20 @@
 {
   "hub": {
-    "path": "/build/pinokio/api/studiohub-mac",
+    "path": "~/pinokio/api/studiohub-mac",
     "commit": "e74ff728654d4c2ac6707b1655b1382451c30d6e",
     "branch": "main",
     "version": "2.21.3",
     "status": ""
   },
   "image": {
-    "path": "/build/pinokio/api/imagestudio-mac",
+    "path": "~/pinokio/api/imagestudio-mac",
     "commit": "207e788ff3b9bb9b173ffe773691f571b567b79f",
     "branch": "main",
     "version": "1.32.1",
     "status": ""
   },
   "voice": {
-    "path": "/build/pinokio/api/voicestudio-mac.git",
+    "path": "~/pinokio/api/voicestudio-mac.git",
     "commit": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
     "branch": "main",
     "version": "2.7.2",
@@ -26,7 +26,7 @@
     "references": [
       {
         "component": "hub",
-        "path": "/build/pinokio/api/studiohub-mac",
+        "path": "~/pinokio/api/studiohub-mac",
         "resolved_commit": "06e893e1643bffbcbd162fae122e5a4d0f29e283",
         "version": "2.22.0",
         "branch": "main",
@@ -35,7 +35,7 @@
       },
       {
         "component": "image",
-        "path": "/build/pinokio/api/imagestudio-mac",
+        "path": "~/pinokio/api/imagestudio-mac",
         "resolved_commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
         "version": "1.32.2",
         "branch": "main",
@@ -44,7 +44,7 @@
       },
       {
         "component": "voice",
-        "path": "/build/pinokio/api/voicestudio-mac.git",
+        "path": "~/pinokio/api/voicestudio-mac.git",
         "resolved_commit": "72e26b795cd3d0a6f76961f8137e4dfd4af59e9b",
         "version": "2.8.1",
         "branch": "main",

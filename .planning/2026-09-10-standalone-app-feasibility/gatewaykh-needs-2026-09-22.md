@@ -8,7 +8,7 @@ GatewayKH source at `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
 ## What I need from the owner before I can act
 
 1. **GatewayKH checkout + authority.** The inventory read
-   `/build/Developer/gateway-kh/repository`. To change it I need either
+   `~/Developer/gateway-kh/repository`. To change it I need either
    that path writable, or you run the prompt below in the GatewayKH project. Tell
    me which.
 2. **Scope.** All five items below, or a subset? My order of value is 1 → 2 → 3 →

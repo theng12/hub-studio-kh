@@ -19,48 +19,48 @@ two-stage half-res snaps dims to multiples of 64; output will be 704x448 (reques
 [estimate] denoising: 8 steps x 1 passes over 1001 video + 101 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
 Denoising:   0%|          | 0/8 [00:00<?, ?it/s]Denoising:   0%|          | 0/8 [00:00<?, ?it/s]
 Traceback (most recent call last):
-  File "/build/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 230, in main
+  File "~/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 230, in main
     pipe.generate_and_save(**call_kwargs)
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
     video_latent, audio_latent = self.generate_two_stage(**gen_kwargs)
                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 278, in generate_two_stage
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 278, in generate_two_stage
     stage1, num_frames, height, width = self._stage1(
                                         ^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 458, in _stage1
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 458, in _stage1
     output_1 = self._run_denoise_loop(
                ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 206, in _run_denoise_loop
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 206, in _run_denoise_loop
     return denoise_loop(
            ^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/utils/samplers.py", line 188, in denoise_loop
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/utils/samplers.py", line 188, in denoise_loop
     video_x0, audio_x0 = model(**call_kwargs)
                          ^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 1029, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 1029, in __call__
     video_v, audio_v = self.model(
                        ^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 390, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 390, in __call__
     return self.inner(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 760, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 760, in __call__
     video_adaln_emb, video_embedded_ts = self._adaln_per_token(self.adaln_single, vt_emb)
                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 606, in _adaln_per_token
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 606, in _adaln_per_token
     params, embedded, inv = _dedupe_adaln(adaln_module, flat)
                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 233, in _dedupe_adaln
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 233, in _dedupe_adaln
     params, embedded = adaln_module(flat)
                        ^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/adaln.py", line 47, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/adaln.py", line 47, in __call__
     embedded = self.emb(timestep_emb)
                ^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/timestep_embedding.py", line 23, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/timestep_embedding.py", line 23, in __call__
     return self.timestep_embedder(sample)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx_arsenal/diffusion/timestep.py", line 60, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx_arsenal/diffusion/timestep.py", line 60, in __call__
     return self.linear2(sample)
            ^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx/nn/layers/quantized.py", line 271, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx/nn/layers/quantized.py", line 271, in __call__
     x = mx.quantized_matmul(
         ^^^^^^^^^^^^^^^^^^^^
 ValueError: [quantized_matmul] The shapes of the weight and scales are incompatible based on bits and group_size. w.shape() == (4096,640) and scales.shape() == (4096,64) with group_size=64 and bits=8
@@ -68,7 +68,7 @@ ValueError: [quantized_matmul] The shapes of the weight and scales are incompati
 FAILED after 26.0s — ValueError: [quantized_matmul] The shapes of the weight and scales are incompatible based on bits and group_size. w.shape() == (4096,640) and scales.shape() == (4096,64) with group_size=64 and bits=8
 peak MLX Metal allocation: 14.22 GB (Metal only — this is NOT the process footprint)
 swap at end: total = 4096.00M  used = 3335.19M  free = 760.81M  (encrypted)
-record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-164140/measurement.json
+record: ~/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-164140/measurement.json
        26.36 real         2.18 user         5.01 sys
          10923573248  maximum resident set size
                    0  average shared memory size

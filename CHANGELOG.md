@@ -48,7 +48,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 - `broker.stamp_governor_note` writes the note with its time on every broker write; `broker.current_governor_note` drops a note older than `PEER_TTL_S` (12 s) or older than `run_started`.
 - `fleet_nodes._RENDER_RELAY_TIMEOUT_S = {"encode_probe_post": 660.0}`: the node's own 600 s probe wall plus the one-minute hop margin `TRANSCRIBE_RELAY_TIMEOUT` already uses; every other operation keeps its 60 s ceiling, unlisted operations documented to keep it. Tests: `tests/test_render_relay_ceiling_0254.py` (3).
 - Two stale assertions in `tests/test_peer_path_contract.py` were corrected, not the behaviour: the services banner owns the "local services stopped" case and `audioBlockedReason` returns nil for it.
-- Scan scrub (the strict `scan-dmg.sh` run over the published 0.253 DMG reported six lines it stops on): `broker.py`'s example studio names are `studio-a`, `registry.py`'s doc example is `192.0.2.10` (TEST-NET-1), `generation.py:137` and `model-manifests/z-image-turbo-mflux-4bit.json` say "Apple M1 Mac mini" where they recorded a hardware model id, the controller field's help text and its two comments use a `mac.tailnet.ts.net` name example, and the changelog's own port note drops its address literal. No measurement, rule or number changed.
+- Scan scrub (the strict `scan-dmg.sh` run over the published 0.253 DMG reported six lines it stops on): `broker.py`'s example studio names are `studio-a`, `registry.py`'s doc example is `192.0.2.10` (TEST-NET-1), `generation.py:137` and `model-manifests/z-image-turbo-mflux-4bit.json` say "Apple M1 Mac mini" where they recorded a hardware model id, the controller field's help text and its two comments use a `mac.local` name example, and the changelog's own port note drops its address literal. No measurement, rule or number changed.
 - `capabilities._model_capability()`: an `execution_ready: false` row whose `hub_cached` is `false` now reports `model_not_installed` instead of `worker_execution_unready`; an installed model with an unready execution keeps `worker_execution_unready`. This is the reason Mac 1100 gave while publishing `memory_eligible: true` for `qwen3-5-9b-4bit` — the memory read was true; the reason was not. Tests: `tests/test_not_installed_reason_0254.py` (2).
 
 ## 0.6.253 — 2026-11-19
@@ -8497,7 +8497,7 @@ description.
 ### Joining is just: the address and the token
 
 You no longer have to type a port, and you no longer have to know the controller's numeric
-address. Paste what Tailscale gives you - `100.x.y.z`, `mac.tailnet.ts.net`, even
+address. Paste what Tailscale gives you - `100.x.y.z`, `mac.local`, even
 `mac-mini.local` - with or without `http://`, and the app fills in the Hub's port for you.
 If you do include a port, that is used instead.
 
@@ -8509,7 +8509,7 @@ looking the name up, rather than by requiring you to type numbers.
 - **The port is optional.** The Hub's port is fixed, so an address on its own is now a complete
   answer and 47873 is assumed. It used to demand `host:port` and refuse the address alone.
 - **A name is accepted**, which is what a tailnet actually gives you:
-  `mac.tailnet.ts.net` or `mac-mini.local` now work, with or without a port and with or
+  `mac.local` or `mac-mini.local` now work, with or without a port and with or
   without `http://`. The safety property is unchanged in substance - a name is resolved
   first and refused unless every address it resolves to is private or Tailscale, so this Mac
   still cannot be pointed at an arbitrary host on the internet.

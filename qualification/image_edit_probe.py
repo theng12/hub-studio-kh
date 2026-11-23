@@ -48,8 +48,8 @@ from components.image.app.backend.generation import (  # noqa: E402
 PROMPT = ('Two friends standing together at a night market in Cambodia, warm lantern light, '
           'crowds and food stalls behind them, cinematic photograph, shallow depth of field')
 SOURCE_REFERENCE = Path(
-    '/build/Developer/_orchestra/character-ref-test-20261025/out/src/'
-    'char_a_20261025.png')
+    '~/Developer/_orchestra/character-ref-test-20261025/out/src/'
+    'char_a_20261025.png').expanduser()
 # package id -> (short name, steps, worst measured reference canvas the row publishes)
 MODELS = {
     'klein': 'flux2-klein-4b-mlx-4bit',

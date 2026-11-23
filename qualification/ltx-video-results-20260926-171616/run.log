@@ -33,10 +33,10 @@ two-stage half-res snaps dims to multiples of 64; output will be 704x448 (reques
 [vae-decode tiling] peak Metal memory 13.19 GB
 [Decoding video + audio + muxing] done in 20.1s
 
-DONE in 298.5s — /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-171616/generated.mp4 (1.8 MB)
+DONE in 298.5s — ~/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-171616/generated.mp4 (1.8 MB)
 peak MLX Metal allocation: 13.19 GB (Metal only — this is NOT the process footprint)
 swap at end: total = 5120.00M  used = 3852.94M  free = 1267.06M  (encrypted)
-record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-171616/measurement.json
+record: ~/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-171616/measurement.json
       298.99 real         9.96 user        34.11 sys
           9907879936  maximum resident set size
                    0  average shared memory size

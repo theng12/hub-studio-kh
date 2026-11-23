@@ -2,11 +2,11 @@
   "schema": "studiohub.video-worker-run.v1",
   "started_at": "2026-09-28T00:44:12+0700",
   "args": {
-    "models_dir": "/build/StudioHubModels",
+    "models_dir": "~/StudioHubModels",
     "data_dir": "None",
     "repo": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
     "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
-    "image": "/build/Developer/studio-hub-kh/qualification/scene.png",
+    "image": "~/Developer/studio-hub-kh/qualification/scene.png",
     "aspect_ratio": "16:9",
     "resolution": "576p",
     "duration": "2",
@@ -19,8 +19,8 @@
     "reason": "terminal state error: [METAL] Command buffer execution failed: Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)."
   },
   "library": {
-    "models_dir": "/build/StudioHubModels",
-    "folder": "/build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
+    "models_dir": "~/StudioHubModels",
+    "folder": "~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
   },
   "finished_at": "2026-09-28T00:44:26+0700",
   "acceptance": {
@@ -41,7 +41,7 @@
       "frame_rate": 24,
       "seed": -1,
       "audio": true,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004410/state/uploads/6283405a1f8845b1aa697582ad24f6d3.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004410/state/uploads/6283405a1f8845b1aa697582ad24f6d3.png"
     }
   },
   "job": {
@@ -61,7 +61,7 @@
       "frame_rate": 24,
       "seed": -1,
       "audio": true,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004410/state/uploads/6283405a1f8845b1aa697582ad24f6d3.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004410/state/uploads/6283405a1f8845b1aa697582ad24f6d3.png"
     },
     "state": "error",
     "progress": 0.15,

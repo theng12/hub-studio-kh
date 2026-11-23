@@ -481,8 +481,8 @@ def test_catalog_reports_runtime_cache_load_and_memory_truth(monkeypatch) -> Non
     # what this worker enforces AND what the Hub reads (`workload_policy.required_free_memory_gb`).
     # The size formula (2.3 + 1.25 = 3.55) must not be a second, stricter floor: live on
     # 2026-10-19 it refused 8 GB Macs the row's own measurement qualifies — "needs about 3.5 GB
-    # free and has about 3.4 GB free" on studio-mac-0107-m2-8-256-hub and
-    # studio-mac-1401-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
+    # free and has about 3.4 GB free" on mac-0107-m2-8-256-hub and
+    # mac-1401-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
     vox_row = next(m for m in catalog.CATALOG if m.repo == target)
     assert vox_row.min_free_memory_gb == 2.8
     assert vox["cold_load_required_free_memory_gb"] == vox_row.min_free_memory_gb

@@ -5,7 +5,7 @@ Owner direction: preserve this flow; research I2V now. The owner clicked VoxCPM2
 ## Current SSD
 
 - Volume: `/Volumes/KH-STUDIO-UGREEN`.
-- Canonical source: `/build/pinokio/api/studiohub-mac/ssd_bootstrap`.
+- Canonical source: `~/pinokio/api/studiohub-mac/ssd_bootstrap`.
 - Hub source release 2.21.6, merged PR https://github.com/theng12/studiohub-mac/pull/21, merge commit ef973838a0087b36c40280bca8b69b389815655a.
 - Current stock: Khmer TTS added and weight checksum verified; OmniVoice already intact. VoxCPM2 8-bit pending owner-confirmed download completion.
 - Last refresh: 31 Voice packages, 6 Image packages, 10 fleet voice references; 124.2 decimal GB indexed. All 27 release inventory checks passed. No inference or fleet restart.

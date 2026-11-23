@@ -8930,7 +8930,7 @@ struct StudioContent: View {
             Text("This Mac registers with the controller and adopts that token, so the controller can send it work. The controller then reports whether this Mac is reachable.")
                 .font(HubType.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                TextField("100.x.y.z  ·  or a name like mac.tailnet.ts.net", text: $controllerDraft)
+                TextField("100.x.y.z  ·  or a name like mac.local", text: $controllerDraft)
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 320)
                 CopyValueButton(value: controllerDraft)
                     .accessibilityLabel("Copy controller address")

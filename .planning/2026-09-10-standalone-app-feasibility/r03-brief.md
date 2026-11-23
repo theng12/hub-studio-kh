@@ -1,7 +1,7 @@
 # R03 — Voice receipt and payload integrity
 
 Base: `b5506178cd0543a4734911c4fdb3c91d21ad271b`.
-Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`.
+Worktree: `~/.codex/worktrees/handoff-completion/studio-hub-kh`.
 Branch: `codex/local-readiness-gatewaykh`.
 Owner: assigned Sol/high worker; coordinator owns review, records and integration.
 

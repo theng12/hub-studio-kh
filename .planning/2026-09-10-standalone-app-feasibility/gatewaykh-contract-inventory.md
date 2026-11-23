@@ -2,8 +2,8 @@
 
 Read-only inventory at the requested source revisions:
 
-- GatewayKH: `/build/Developer/gateway-kh/repository`, `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
-- StudioHub: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`, `b5506178cd0543a4734911c4fdb3c91d21ad271b`.
+- GatewayKH: `~/Developer/gateway-kh/repository`, `736d7b05625fcc46ccdafdc7206319c9214f9b27`.
+- StudioHub: `~/.codex/worktrees/handoff-completion/studio-hub-kh`, `b5506178cd0543a4734911c4fdb3c91d21ad271b`.
 
 The GatewayKH checkout had a pre-existing modified `.DS_Store`; it was not touched. No live service, credential, database, backup, transfer, Downloads model library, or installed app was accessed.
 

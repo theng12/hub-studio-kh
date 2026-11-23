@@ -106,31 +106,31 @@
   "transfer_allocated_sizes_du_sh": [
     {
       "size": "1.7G",
-      "path": "/build/Projects/studiohub-standalone/.build/voice-runtime"
+      "path": "~/Projects/studiohub-standalone/.build/voice-runtime"
     },
     {
       "size": "1.1G",
-      "path": "/build/Projects/studiohub-standalone/.build/st03-image-runtime-worker"
+      "path": "~/Projects/studiohub-standalone/.build/st03-image-runtime-worker"
     },
     {
       "size": "9.4M",
-      "path": "/build/Projects/studiohub-standalone/.build/test-deps"
+      "path": "~/Projects/studiohub-standalone/.build/test-deps"
     },
     {
       "size": " 58M",
-      "path": "/build/Projects/studiohub-standalone/.build/downloads"
+      "path": "~/Projects/studiohub-standalone/.build/downloads"
     },
     {
       "size": "3.2G",
-      "path": "/build/Projects/studiohub-standalone/.build/uv-cache"
+      "path": "~/Projects/studiohub-standalone/.build/uv-cache"
     },
     {
       "size": "130G",
-      "path": "/build/StudioHubModels"
+      "path": "~/StudioHubModels"
     },
     {
       "size": "2.8G",
-      "path": "/build/Applications/Studio Hub.app"
+      "path": "~/Applications/Studio Hub.app"
     }
   ],
   "locks": {

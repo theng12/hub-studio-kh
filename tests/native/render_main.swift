@@ -774,8 +774,8 @@ struct PageRenderHarness {
             {"job_id":"job-77","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit","label":"genstudio-kh","started_at":\(now - 640)}
             """
         workspace.controllerIdentity = decode(NativeControllerIdentity.self, """
-            {"settings": {"role": "\(wire)", "site_id": "site-blue", "site_name": "Blue Room", "controller_id": "studio-mac-1503",
-                          "machine_name": "studio-mac-1503-m4-24-256", "database_mode": "sqlite",
+            {"settings": {"role": "\(wire)", "site_id": "site-blue", "site_name": "Blue Room", "controller_id": "mac-1503",
+                          "machine_name": "mac-1503-m4-24-256", "database_mode": "sqlite",
                           "fleet_credential_origin": "\(wire == "agent" ? "adopted" : "minted")"},
              "readiness": {"ready": true, "role": "\(wire)"}}
             """)
@@ -799,10 +799,10 @@ struct PageRenderHarness {
         case "agent":
             workspace.fleetOverview = decode(NativeFleetOverview.self, """
                 {"machines":[\(machineJSON("local", "This Mac", role: "agent", chip: "Apple M2 Max", memory: 32, available: 16.21, disk: 188, total: 460, diskState: "green", jobs: 40, job: working)),
-                   \(machineJSON("c", "studio-mac-1500-m4-16-256-controller", role: "controller", reachable: role != "node-offline", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, address: "100.64.0.12:47873")),
+                   \(machineJSON("c", "mac-1500-m4-16-256-controller", role: "controller", reachable: role != "node-offline", chip: "Apple M4", memory: 16, available: 9.8, disk: 142, total: 460, diskState: "green", jobs: 61, address: "100.64.0.12:47873")),
                    \(machineJSON("blue-2", "Blue Room 2", role: "agent", chip: "Apple M2", memory: 8, available: 1.2, disk: 21, total: 256, diskState: "amber", jobs: 30, address: "100.64.0.22:47873"))],
                  "summary":{"total":3,"reachable":\(role == "node-offline" ? 2 : 3),"unreachable":\(role == "node-offline" ? 1 : 0)},"role":"agent",
-                 "controller": {"machine": "c", "label": "studio-mac-1500-m4-16-256-controller", "role": "controller", "address": "100.64.0.12:47873", "state": "\(role == "node-offline" ? "unreachable" : "reachable")"},
+                 "controller": {"machine": "c", "label": "mac-1500-m4-16-256-controller", "role": "controller", "address": "100.64.0.12:47873", "state": "\(role == "node-offline" ? "unreachable" : "reachable")"},
                  "roster_readable": true}
                 """)
             workspace.fleetNodes = decode(NativeFleetInventory.self, """

@@ -1,6 +1,6 @@
 {
   "app": "/Applications/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "models_dir": "~/StudioHubModels",
   "model": "mlx-community/whisper-base-mlx",
   "input": {
     "file": "st04-reference-clip.wav",

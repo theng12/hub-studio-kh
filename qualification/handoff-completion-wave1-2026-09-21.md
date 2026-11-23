@@ -9,7 +9,7 @@ whose merge state/hash is authoritative. No later roadmap task is qualified here
 - Plan base: `0ec3b3b09c9642b670ec0a092f4223ea4ffe0e24`.
 - R01 native repair: `0e116711535618250cbbdd8cb48b4c190bf352fd`.
 - R02 / clean tested product source: `7ec9f89dd4a225ba2431747f746d56dc786e4ef4`.
-- App: `/build/.codex/worktrees/handoff-completion/studio-hub-kh/.build/StudioHubWave1.app`.
+- App: `~/.codex/worktrees/handoff-completion/studio-hub-kh/.build/StudioHubWave1.app`.
 - Version 0.6.38, `development_build=false`; this is a local candidate, not a release.
 - App tree SHA256: `07c4d895b795513c9c5f8d1d073d34c90a31a40e5bd950f06f797bfa85d8cb25`.
 - Native binary SHA256, equal before/after staging:
@@ -63,12 +63,12 @@ bash native/build.sh
 .build/voice-runtime/bin/python3 -B packaging/stage_voice.py \
   --runtime .build/voice-runtime --native-shell .build/StudioHub \
   --image-runtime .build/st03-image-runtime-worker --music-runtime .build/music-runtime \
-  --music-engine /build/Developer/studio-hub-kh/.build/music-engine-source \
+  --music-engine ~/Developer/studio-hub-kh/.build/music-engine-source \
   --output .build/StudioHubWave1.app
 
 STUDIOHUB_TEST_APP="$PWD/.build/StudioHubWave1.app" \
 STUDIOHUB_TEST_MUSIC_OVERLAY="$PWD/.build/music-runtime" \
-STUDIOHUB_TEST_MUSIC_ENGINE=/build/Developer/studio-hub-kh/.build/music-engine-source \
+STUDIOHUB_TEST_MUSIC_ENGINE=~/Developer/studio-hub-kh/.build/music-engine-source \
 STUDIOHUB_TEST_VOICE_PYTHON="$PWD/.build/voice-runtime/bin/python3" \
 STUDIOHUB_TEST_RUNTIME="$PWD/.build/voice-runtime/bin/python3" \
 PYTHONPATH="$PWD/.build/test-deps" \

@@ -7,7 +7,7 @@ narrow adopted behavior are recorded in `research/image-adoption.json`.
 The FLUX package is `AITRADER/FLUX2-klein-4B-mlx-4bit` at immutable revision
 `7fd24828501390b67a92c8b66d2fc5a707d0ba1a`. The complete source
 snapshot was imported separately, then registered in place through the ST-01
-helper at `/build/Projects/studiohub-standalone/model-library`;
+helper at `~/Projects/studiohub-standalone/model-library`;
 `preflight` returns `files_verified` and manifest SHA-256
 `e1f40ce0c9bd1303277ee5a943c2abac3d973eeeabd9cae7c58f6f7c23487e66`.
 Existing Khmer, Whisper Base and Whisper Small folders remain in that library.
@@ -34,7 +34,7 @@ FastAPI 0.141.1 and Uvicorn 0.52.4. Final runtime tree SHA-256:
 `c9cd56a6d1cde6b72dee8ba22cf45fcbd640538207038087261cae91ec67f67e`.
 
 Focused Image test command:
-`/build/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 -B -m unittest tests.test_image_standalone tests.test_image_bundle -v`
+`~/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 -B -m unittest tests.test_image_standalone tests.test_image_bundle -v`
 initially exited 0: five tests passed. Cases cover all-path owner token (including
 loopback), missing `text_encoder/0.safetensors` refusing dispatch, invalid
 model/mode/control requests, cancellation without final PNG, PNG dimensions,
@@ -52,7 +52,7 @@ steps/guidance reach mflux, square preset inference, failed submit rollback,
 failed running/final receipt stops or discards generation, ACK rollback, and
 restart with an unreceipted final PNG. The dedicated Hub Image uncertainty
 regression command
-`PYTHONPATH=/build/Projects/studiohub-standalone/.build/test-deps /build/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 -m pytest -q tests/hub_regression/cases/test_image_uncertainty.py`
+`PYTHONPATH=~/Projects/studiohub-standalone/.build/test-deps ~/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 -m pytest -q tests/hub_regression/cases/test_image_uncertainty.py`
 initially exited 0: five cases. The final dedicated suite passed fifteen cases,
 and the full Hub regression suite passed 47. The Image cases cover lost/malformed submission acceptance,
 accepted worker poll loss, worker final-receipt uncertainty, known HTTP

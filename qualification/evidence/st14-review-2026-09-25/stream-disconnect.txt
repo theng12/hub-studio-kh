@@ -1,4 +1,4 @@
-/build/Developer/studio-hub-kh/.build/voice-runtime/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+~/Developer/studio-hub-kh/.build/voice-runtime/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
 probe server on 127.0.0.1:51883
 first chunk: data: {"id": "chatcmpl-09e7de8225cb4839bcf9a2cb535f6edf", "o

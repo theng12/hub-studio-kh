@@ -109,7 +109,7 @@ to the verified project-owned inputs):
 ```sh
 STUDIOHUB_TEST_APP="$PWD/.build/StudioHubCandidate.app" \
 STUDIOHUB_TEST_MUSIC_OVERLAY="$PWD/.build/music-runtime" \
-STUDIOHUB_TEST_MUSIC_ENGINE=/build/Developer/studio-hub-kh/.build/music-engine-source \
+STUDIOHUB_TEST_MUSIC_ENGINE=~/Developer/studio-hub-kh/.build/music-engine-source \
 STUDIOHUB_TEST_VOICE_PYTHON="$PWD/.build/voice-runtime/bin/python3" \
 STUDIOHUB_TEST_RUNTIME="$PWD/.build/voice-runtime/bin/python3" \
 PYTHONPATH="$PWD/.build/test-deps" \

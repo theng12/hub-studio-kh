@@ -34,8 +34,8 @@ from components.hub.backend.render_cue_media import (
 )
 
 FIXTURES_PATH = Path(
-    "/build/Developer/_orchestra/story-lead/fleet-batch-20261107/cue-overlay-review-r4-a441bfc7/fixtures.json"
-)
+    "~/Developer/_orchestra/story-lead/fleet-batch-20261107/cue-overlay-review-r4-a441bfc7/fixtures.json"
+).expanduser()
 
 DEFAULT_BOUNDS = {
     "bounds_version": 2,

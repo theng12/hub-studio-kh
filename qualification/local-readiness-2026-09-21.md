@@ -45,7 +45,7 @@ The final root command ran with these explicit inputs in the preserved worktree:
 ```sh
 STUDIOHUB_TEST_APP="$PWD/.build/StudioHubLocalReadinessV2.app" \
 STUDIOHUB_TEST_MUSIC_OVERLAY="$PWD/.build/music-runtime" \
-STUDIOHUB_TEST_MUSIC_ENGINE=/build/Developer/studio-hub-kh/.build/music-engine-source \
+STUDIOHUB_TEST_MUSIC_ENGINE=~/Developer/studio-hub-kh/.build/music-engine-source \
 STUDIOHUB_TEST_VOICE_PYTHON="$PWD/.build/voice-runtime/bin/python3" \
 STUDIOHUB_TEST_RUNTIME="$PWD/.build/voice-runtime/bin/python3" \
 PYTHONPATH="$PWD/.build/test-deps" \
@@ -61,7 +61,7 @@ belongs to `936b3e5`, not a later evidence/merge commit.
 ## Artifact and review
 
 Preserved app: `.build/StudioHubLocalReadinessV2.app` in
-`/build/.codex/worktrees/handoff-completion/studio-hub-kh`.
+`~/.codex/worktrees/handoff-completion/studio-hub-kh`.
 Version0.6.38, `development_build:false`, `qualification:unqualified-local-proof`.
 Tree SHA256: `06e881146e69e88097df71291569ffa873acf541381dc3fb8010df1ec34024e7`.
 Native SHA256: `2e7fa67d3d68208af2b859123345d9c40a76c7719e3677eaa7d5f09a8b936848`.

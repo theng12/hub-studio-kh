@@ -1,4 +1,4 @@
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] ...
 Mac: Apple M2 Max Mac14,13 — 32 GB unified, macOS 27.0
 swap at start: total = 5120.00M  used = 4023.81M  free = 1096.19M  (encrypted)
@@ -9,12 +9,12 @@ image-to-video: yes
 
 loader: the pack's own mixed-precision quantizer (split_model.json says quantized: true)
 Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 3684.93it/s]
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] done in 4.3s
 [Encoding prompt] ...
 [Encoding prompt] done in 13.6s
 [Loading transformer (transformer-distilled.safetensors)] ...
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
   Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
 [Loading transformer (transformer-distilled.safetensors)] done in 3.5s
 [estimate] denoising: 8 steps x 1 passes over 1008 video + 51 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)

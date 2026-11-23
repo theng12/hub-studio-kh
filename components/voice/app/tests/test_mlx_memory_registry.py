@@ -52,7 +52,7 @@ def test_a_published_floor_is_the_only_floor_this_worker_enforces() -> None:
     (its row, owner's choice 2026-10-02 from 8 GB runs that started cleanly at 3.25 GB free)
     against 3.55 (size 2.3 + 1.25), and the 3.55 refused 8 GB Macs the measurement qualifies:
     live 2026-10-19 as "needs about 3.5 GB free and has about 3.4 GB free" on
-    studio-mac-0107-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
+    mac-0107-m2-8-256-hub, job 97bdce60, 3,068 INSUFFICIENT_MEMORY hand-backs.
     """
     for row in catalog.CATALOG:
         if row.min_free_memory_gb is None:

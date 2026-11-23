@@ -21,7 +21,7 @@ import pytest
 from test_discard_route_fleet import packaged_app  # noqa: F401  (the shared packaged-Hub fixture)
 
 PKG = "lan-fixture"
-NODE = "studio-mac-1104-hub"
+NODE = "mac-1104-hub"
 ADDRESS = "http://100.96.171.104:47873"
 FILES = {"weights.safetensors": b"w" * 5000, "tokenizer/config.json": b'{"a": 1}'}
 GIB = 1024 ** 3

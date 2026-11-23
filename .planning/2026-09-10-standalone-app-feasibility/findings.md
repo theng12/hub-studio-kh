@@ -6,7 +6,7 @@
 - MLX documents macOS 14+ Apple Silicon support; full model/engine qualification on 14 remains unproven.
 - Existing SSD bootstrap installs generation environments; it is not a standalone relocatable application.
 - GenStudio consumes authenticated Hub API and immutable release/runtime identities. Git/Pinokio maintenance assumptions require explicit packaged-runtime adaptation.
-- Existing Graphify graph at /build/pinokio/graphify-out/graph.json has 747 nodes, 1669 edges and 27 source-file entries, covering Voice backend only. It is a navigation aid, not current proof of runtime reachability. No Hub graph was found.
+- Existing Graphify graph at ~/pinokio/graphify-out/graph.json has 747 nodes, 1669 edges and 27 source-file entries, covering Voice backend only. It is a navigation aid, not current proof of runtime reachability. No Hub graph was found.
 
 ## Sources
 https://ml-explore.github.io/mlx/build/html/install.html

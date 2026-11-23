@@ -1488,7 +1488,7 @@ final class FixtureProtocol: URLProtocol {
         case ("GET", "/api/hub/jobs/old-job"):
             Self.lock.lock(); let refuse = Self.failJobDetail; Self.lock.unlock()
             if refuse { result = (500, "application/json", Data(#"{"detail":"fixture cannot read this batch"}"#.utf8)); break }
-            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"governor_note":"'x' not downloaded on image@studio-mac-1102 — download it on that Mac, or pin another","items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact","runtime_s":31.0,"machine":"studio-mac-1102","tries":2,"retry_at":4102444800.0}]}"#.utf8))
+            result = (200, "application/json", Data(#"{"id":"old-job","modality":"voice","model":"mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit","created_at":10,"governor_note":"'x' not downloaded on image@mac-1102 — download it on that Mac, or pin another","items":[{"index":0,"state":"done","progress":1.0,"prompt":"Earlier","artifact_url":"/api/hub/jobs/old-job/items/0/artifact","runtime_s":31.0,"machine":"mac-1102","tries":2,"retry_at":4102444800.0}]}"#.utf8))
         case ("GET", "/api/hub/jobs/new-job"):
             // `created_at` matters: history is sorted by it, and the assertions below take the
             // most recent job, which is this one.
@@ -5286,9 +5286,9 @@ struct NativeAPITests {
         require(store.audioJobs.first?.id == "old-job", "existing audio jobs must load")
         // What the Hub says about a waiting job, and where it ran, reaches the row (F1/F3).
         let described = store.audioJobs.first
-        require(described?.governorNote?.contains("not downloaded on image@studio-mac-1102") == true,
+        require(described?.governorNote?.contains("not downloaded on image@mac-1102") == true,
                 "the Hub's reason for a waiting batch must be decoded, not replaced by a fixed sentence")
-        require(described?.machine == "studio-mac-1102" && described?.tries == 2 && described?.retryAt == 4_102_444_800,
+        require(described?.machine == "mac-1102" && described?.tries == 2 && described?.retryAt == 4_102_444_800,
                 "the machine, tries and next retry must be decoded: \(String(describing: described))")
         let inTen = Date(timeIntervalSince1970: 4_102_444_790)
         require(NativeJob.waitingLabel(note: nil, tries: nil, retryAt: nil, now: inTen) == "Waiting for a free worker",

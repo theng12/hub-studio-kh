@@ -13,9 +13,9 @@
     "model_dir": "/Volumes/KH-STUDIO-ATLAS/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx",
     "gemma_model": "mlx-community/gemma-3-12b-it-4bit",
     "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
-    "image": "/build/Developer/studio-hub-kh/qualification/scene.png",
+    "image": "~/Developer/studio-hub-kh/qualification/scene.png",
     "require_image_to_video": true,
-    "output": "/build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
+    "output": "~/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
     "height": 480,
     "width": 704,
     "num_frames": 97,
@@ -26,13 +26,13 @@
     "low_ram_streaming": false,
     "effective_call": {
       "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
-      "output_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
+      "output_path": "~/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
       "height": 480,
       "width": 704,
       "num_frames": 97,
       "frame_rate": 24.0,
       "seed": 42,
-      "image": "/build/Developer/studio-hub-kh/qualification/scene.png"
+      "image": "~/Developer/studio-hub-kh/qualification/scene.png"
     }
   },
   "runtime": {
@@ -64,7 +64,7 @@
     "wall_seconds": 23.796,
     "peak_metal_bytes": 15263625756,
     "peak_metal_gb": 14.22,
-    "output": "/build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
+    "output": "~/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/generated.mp4",
     "output_bytes": null,
     "swap_at_end": "total = 2048.00M  used = 377.19M  free = 1670.81M  (encrypted)"
   },

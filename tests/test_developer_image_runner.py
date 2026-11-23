@@ -32,8 +32,8 @@ try:
 except Exception:  # pragma: no cover - the focused test skips schema checks only
     jsonschema = None
 
-AUTHORITY = Path("/build/Developer/_orchestra/developer-mode-20261105/"
-                 "developer-test-v1-candidate2.schema.json")
+AUTHORITY = Path("~/Developer/_orchestra/developer-mode-20261105/"
+                 "developer-test-v1-candidate2.schema.json").expanduser()
 
 
 def _png(width: int, height: int) -> bytes:

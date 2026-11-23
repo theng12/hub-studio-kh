@@ -1,6 +1,6 @@
 {
-  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "app": "~/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "~/StudioHubModels",
   "model": "mlx-community/whisper-large-v3-turbo",
   "input": {
     "file": "st04-reference-clip.wav",

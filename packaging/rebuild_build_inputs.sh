@@ -67,7 +67,7 @@
 # Idempotent: an input that already passes its check is left alone and nothing is downloaded. One
 # that is present but wrong is moved into `_trash/build-inputs-<stamp>/` first — nothing here
 # deletes, and `_trash/` is the owner's to sort out. The pinned trees under
-# `~/Developer/_build-inputs/studio-hub-kh/` are never written to; they are inputs to *copy*, not
+# `~/Developer/_orchestra/_build-inputs/studio-hub-kh/` are never written to; they are inputs to *copy*, not
 # to install into.
 #
 # Network: PyPI and the one `mlx-Yue` git clone. No model weights, no Hub, no generation.

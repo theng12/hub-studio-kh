@@ -5,7 +5,7 @@
 # the real model library, and reads the routes the native app reads. No model is loaded: no
 # completion is requested, so this costs seconds and does not touch the 6 GB snapshot.
 set -u
-ROOT=/build/Developer/studio-hub-kh
+ROOT="$HOME/Developer/_orchestra/developer-media/hub-studio-kh/app"
 APP="$ROOT/.build/StudioHub-0662/Hub Studio KH.app"
 RES="$APP/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"

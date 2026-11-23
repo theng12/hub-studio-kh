@@ -458,8 +458,8 @@ def test_a_floor_this_mac_can_never_reach_is_skipped_not_waited_on(reset):
     and Fish Audio S2 Pro 4-bit publishes an 8.4 GB free-before-start floor
     (`components/voice/app/backend/catalog.py`, measured 2026-10-02 on the 32 GB M2 Max). Job
     `97bdce60-90f4-4f47-b789-073744e87ea7` is the same defect one class up: the Hub answered
-    `wait` on `studio-mac-0107-m2-8-256-hub` ("needs about 3.5 GB free and has about 3.4 GB free")
-    and `studio-mac-1401-m2-8-256-hub` (3.3 GB) — 126 attempts, 3,068 `INSUFFICIENT_MEMORY`
+    `wait` on `mac-0107-m2-8-256-hub` ("needs about 3.5 GB free and has about 3.4 GB free")
+    and `mac-1401-m2-8-256-hub` (3.3 GB) — 126 attempts, 3,068 `INSUFFICIENT_MEMORY`
     hand-backs in `gateway-kh.log.1`, against a Gateway whose only mitigation is a 15-minute
     in-memory cooldown (`fleet.MEMORY_COOLDOWN_S`).
 

@@ -1,5 +1,5 @@
 {
-  "app": "/build/.codex/worktrees/handoff-completion/studio-hub-kh/.build/StudioHubWave1.app",
+  "app": "~/.codex/worktrees/handoff-completion/studio-hub-kh/.build/StudioHubWave1.app",
   "tree_sha256": "07c4d895b795513c9c5f8d1d073d34c90a31a40e5bd950f06f797bfa85d8cb25",
   "identity": {
     "version": "0.6.38",

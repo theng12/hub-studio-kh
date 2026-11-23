@@ -2,7 +2,7 @@
 
 Base `b5506178cd0543a4734911c4fdb3c91d21ad271b`; branch
 `codex/local-readiness-gatewaykh`; worktree
-`/build/.codex/worktrees/handoff-completion/studio-hub-kh`.
+`~/.codex/worktrees/handoff-completion/studio-hub-kh`.
 
 ## Result and changed files
 

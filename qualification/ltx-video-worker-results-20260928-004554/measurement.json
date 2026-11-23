@@ -2,11 +2,11 @@
   "schema": "studiohub.video-worker-run.v1",
   "started_at": "2026-09-28T00:45:55+0700",
   "args": {
-    "models_dir": "/build/StudioHubModels",
+    "models_dir": "~/StudioHubModels",
     "data_dir": "None",
     "repo": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
     "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
-    "image": "/build/Developer/studio-hub-kh/qualification/scene.png",
+    "image": "~/Developer/studio-hub-kh/qualification/scene.png",
     "aspect_ratio": "16:9",
     "resolution": "576p",
     "duration": "2",
@@ -17,7 +17,7 @@
     "status": "ok",
     "job_id": "e9caa8c4ce2a4074a29d2349a99193ce",
     "artifact": {
-      "path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
+      "path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
       "http_bytes": 2055736,
       "declared_bytes": 2055736,
       "declared_sha256": "dfa5f3fca8ffb6b87a91c11a41148672f9f32c55b7e3c39aadbc37cd06c4c750",
@@ -34,8 +34,8 @@
     }
   },
   "library": {
-    "models_dir": "/build/StudioHubModels",
-    "folder": "/build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
+    "models_dir": "~/StudioHubModels",
+    "folder": "~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
   },
   "finished_at": "2026-09-28T00:50:15+0700",
   "acceptance": {
@@ -56,7 +56,7 @@
       "frame_rate": 24,
       "seed": -1,
       "audio": true,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/uploads/b62be396d4be4a1e9f1ac04e989bdb8d.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/uploads/b62be396d4be4a1e9f1ac04e989bdb8d.png"
     }
   },
   "job": {
@@ -76,7 +76,7 @@
       "frame_rate": 24,
       "seed": -1,
       "audio": true,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/uploads/b62be396d4be4a1e9f1ac04e989bdb8d.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/uploads/b62be396d4be4a1e9f1ac04e989bdb8d.png"
     },
     "state": "done",
     "progress": 1.0,
@@ -86,7 +86,7 @@
     "finished_at": 1790531413.964257,
     "generated_at": 1790531413.964257,
     "duration_seconds": 257.9852569103241,
-    "output_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/outputs/e9caa8c4ce2a4074a29d2349a99193ce.mp4",
+    "output_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/state/outputs/e9caa8c4ce2a4074a29d2349a99193ce.mp4",
     "output_url": "/api/generate/jobs/e9caa8c4ce2a4074a29d2349a99193ce/video",
     "sha256": "dfa5f3fca8ffb6b87a91c11a41148672f9f32c55b7e3c39aadbc37cd06c4c750",
     "bytes": 2055736,
@@ -103,7 +103,7 @@
     "model_revision": "d8a9d2f6081c4136130983a0b612962418ddf203",
     "runtime_revision": "verification-run",
     "quantization_loader": "pack_generate.py:_patch_pipeline_quantization",
-    "gemma_model_path": "/build/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
+    "gemma_model_path": "~/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
     "memory_mode": "default",
     "peak_mlx_bytes": 10046030772,
     "peak_process_rss_bytes": 9248620544,
@@ -114,11 +114,11 @@
     "machine_id": "local",
     "acknowledged": false,
     "runner": "video-ltx",
-    "companion_path": "/build/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
+    "companion_path": "~/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
     "runner_detail": {}
   },
   "artifact": {
-    "path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
+    "path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260928-004554/generated.mp4",
     "http_bytes": 2055736,
     "declared_bytes": 2055736,
     "declared_sha256": "dfa5f3fca8ffb6b87a91c11a41148672f9f32c55b7e3c39aadbc37cd06c4c750",

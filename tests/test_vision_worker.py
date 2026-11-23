@@ -626,7 +626,7 @@ class VisionRegistrationTests(unittest.TestCase):
         allowed = lambda method, path: any(
             method == m and re.match(pattern, path) for m, pattern in auth.FLEET_ALLOWED)
         self.assertTrue(allowed("POST", "/studio/vision/v1/vision/analyze"))
-        self.assertTrue(allowed("POST", "/api/hub/fleet/nodes/studio-mac-0106-m2-8-256-hub/vision/analyze"))
+        self.assertTrue(allowed("POST", "/api/hub/fleet/nodes/mac-0106-m2-8-256-hub/vision/analyze"))
         self.assertTrue(allowed("GET", "/studio/vision/api/catalog"))
         self.assertFalse(allowed("PUT", "/studio/vision/api/memory-policy"))
         self.assertTrue(allowed("POST", "/studio/vision/api/memory/release"))

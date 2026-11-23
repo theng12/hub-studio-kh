@@ -21,37 +21,37 @@ two-stage half-res snaps dims to multiples of 64; output will be 704x448 (reques
 [estimate] denoising: 8 steps x 1 passes over 1001 video + 101 audio tokens = 8 forwards (cost follows total clip length, not the regenerated window)
 Denoising:   0%|          | 0/8 [00:00<?, ?it/s]Denoising:   0%|          | 0/8 [00:03<?, ?it/s]
 Traceback (most recent call last):
-  File "/build/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 301, in main
+  File "~/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 301, in main
     pipe.generate_and_save(**call_kwargs)
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
     video_latent, audio_latent = self.generate_two_stage(**gen_kwargs)
                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 278, in generate_two_stage
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 278, in generate_two_stage
     stage1, num_frames, height, width = self._stage1(
                                         ^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 458, in _stage1
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 458, in _stage1
     output_1 = self._run_denoise_loop(
                ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 206, in _run_denoise_loop
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/distilled.py", line 206, in _run_denoise_loop
     return denoise_loop(
            ^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/utils/samplers.py", line 188, in denoise_loop
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-pipelines-mlx/src/ltx_pipelines_mlx/utils/samplers.py", line 188, in denoise_loop
     video_x0, audio_x0 = model(**call_kwargs)
                          ^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 1029, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 1029, in __call__
     video_v, audio_v = self.model(
                        ^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 390, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 390, in __call__
     return self.inner(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 834, in __call__
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/model/transformer/model.py", line 834, in __call__
     block = block_provider(block_idx) if block_provider is not None else self.transformer_blocks[block_idx]
             ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 364, in provider
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 364, in provider
     streamer.bind(
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 238, in bind
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/packages/ltx-core-mlx/src/ltx_core_mlx/loader/block_streaming.py", line 238, in bind
     block.load_weights(weights, strict=True)
-  File "/build/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx/nn/layers/base.py", line 185, in load_weights
+  File "~/Developer/studio-hub-kh/.build/ltx-2-mlx/env/lib/python3.11/site-packages/mlx/nn/layers/base.py", line 185, in load_weights
     raise ValueError(
 ValueError: Received 2 parameters not in model: 
 video_to_audio_attn.to_gate_logits.biases,
@@ -62,7 +62,7 @@ video_to_audio_attn.to_gate_logits.biases,
 video_to_audio_attn.to_gate_logits.scales.
 peak MLX Metal allocation: 14.22 GB (Metal only — this is NOT the process footprint)
 swap at end: total = 4096.00M  used = 3553.56M  free = 542.44M  (encrypted)
-record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-164405/measurement.json
+record: ~/Developer/studio-hub-kh/qualification/ltx-video-results-20260926-164405/measurement.json
        30.07 real         2.22 user         5.06 sys
          10957455360  maximum resident set size
                    0  average shared memory size

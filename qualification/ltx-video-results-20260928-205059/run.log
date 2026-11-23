@@ -17,7 +17,7 @@ warning: no transformer config (embedded_config.json / config.json) found in /Vo
 warning: no transformer config (embedded_config.json / config.json) found in /Volumes/KH-STUDIO-ATLAS/model-library/video-models/ltx-2.3-22b-ram-12gb-mlx; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading transformer (transformer-distilled.safetensors)] done in 0.1s
 Traceback (most recent call last):
-  File "/build/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 301, in main
+  File "~/Developer/studio-hub-kh/qualification/ltx-video-measure.py", line 301, in main
     pipe.generate_and_save(**call_kwargs)
   File "/Applications/Studio Hub.app/Contents/Resources/runtimes/video/lib/python3.11/site-packages/ltx_pipelines_mlx/ti2vid_two_stages.py", line 740, in generate_and_save
     video_latent, audio_latent = self.generate_two_stage(**gen_kwargs)
@@ -44,7 +44,7 @@ RuntimeError: [load_safetensors] Tensor 'transformer.adaln_single.emb.timestep_e
 FAILED after 23.8s — RuntimeError: [load_safetensors] Tensor 'transformer.adaln_single.emb.timestep_embedder.linear1.bias' invalid data offsets (8706572288, 8706580480) exceeding the size of the file. Perhaps an incomplete download or corrupt file?
 peak MLX Metal allocation: 14.22 GB (Metal only — this is NOT the process footprint)
 swap at end: total = 2048.00M  used = 377.19M  free = 1670.81M  (encrypted)
-record: /build/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/measurement.json
+record: ~/Developer/studio-hub-kh/qualification/ltx-video-results-20260928-205059/measurement.json
        24.70 real         2.60 user         4.28 sys
           8965046272  maximum resident set size
                    0  average shared memory size

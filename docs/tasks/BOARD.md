@@ -71,13 +71,13 @@ Astra/root owns integration. Same bounded worker completed frozen four-file cand
 
 ### ST-FUNCTION-PRIORITY-20261008 — 0.6.157 SOURCE VERIFIED; delivery receipt owns running status
 
-Owner-approved per-Mac ranked functions or No preference are source-verified, locally in Hub and centrally in Gateway. Base Hub30c6f65/Gatewaye75ce2c. Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/function-priority-20261008.md`. Hub integration267 and backend regressions374 passed; native API/lifecycle/secret/boundary/build and actual-view renders passed. Independent findings resolved. Preserve pause/function/model choices and Qwen qualification worktree. Coordinator's `/build/Developer/_orchestra/function-priority-20261008/DELIVERY.md` owns final commit/push/DMG/install/graph status; source status alone never establishes a live157 installation.
+Owner-approved per-Mac ranked functions or No preference are source-verified, locally in Hub and centrally in Gateway. Base Hub30c6f65/Gatewaye75ce2c. Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/function-priority-20261008.md`. Hub integration267 and backend regressions374 passed; native API/lifecycle/secret/boundary/build and actual-view renders passed. Independent findings resolved. Preserve pause/function/model choices and Qwen qualification worktree. Coordinator's `~/Developer/_orchestra/function-priority-20261008/DELIVERY.md` owns final commit/push/DMG/install/graph status; source status alone never establishes a live157 installation.
 
 ### ST-WORK-POLICY-20261007 — 0.6.156 SOURCE VERIFIED; delivery receipt owns running status
 
 Integrated over `1bb472a` / 0.6.155. Local function choices, finish-current/queued-LLM-first dispatch with idle lending, bounded Gateway waiting, verified JPEG exports and Image-local preview errors are source-verified. Full discovery recorded 2,270 tests, 15 skips, two fixture failures and no errors; the repaired affected replay passed 70 of 71, then its remaining synthetic-library Chat fixture passed in a targeted full-discovery-context run. No production behavior change repaired those gate failures. Native boundary/API passed; after a view-only privacy compile fix, unchanged API hashes guarded the passing secret/lifecycle/release compile tail. Rendering produced 24 actual-view captures; the coordinator inspected seven across Settings/Image/Video, both widths and themes. Independent review found no high-impact issue. See canonical handoff for exact logs and capture limits.
 
-Commit, installer and measured running identities belong to `/build/Developer/_orchestra/codex-remediation-20261007/WORK-POLICY-DELIVERY.md`, which the coordinator updates during delivery. Source verification does not claim installation. Keep the owner's Gateway This Mac pause. Plan source/UI checks are recorded; delivery stays open until that receipt verifies it. The 0.6.155 qualification block below is preserved.
+Commit, installer and measured running identities belong to `~/Developer/_orchestra/codex-remediation-20261007/WORK-POLICY-DELIVERY.md`, which the coordinator updates during delivery. Source verification does not claim installation. Keep the owner's Gateway This Mac pause. Plan source/UI checks are recorded; delivery stays open until that receipt verifies it. The 0.6.155 qualification block below is preserved.
 
 ### ST-GEMMA32-QUAL-20261007 — 0.6.155 INSTALLED on This Mac
 
@@ -537,7 +537,7 @@ R01/R02 are merged at `b5506178cd0543a4734911c4fdb3c91d21ad271b` (PR #12).
 [PR #13](https://github.com/theng12/Studio-Hub-KH/pull/13), whose merge state and
 merge commit are authoritative. R05's SDK/lifecycle-build slice and GatewayKH
 copy/contract inventory are included; the rest of R05/R09 remains open. Worktree:
-`/build/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
+`~/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
 `codex/local-readiness-gatewaykh`. Holder: root, completing Git integration;
 workers are finished. Root full gate: 641 tests OK/7 skips, Voice722/19, Hub108,
 native build and four-worker model-free package checks passed.
@@ -577,7 +577,7 @@ Integration is tracked by [PR #12](https://github.com/theng12/Studio-Hub-KH/pull
 its merge state and merge commit are authoritative. Root owns the board, plan
 and Git integration. **Next after PR #12 is merged:** R03 Voice receipt/payload
 repair, starting from the fresh integration HEAD. No R03 worker has been dispatched.
-Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
+Worktree: `~/.codex/worktrees/handoff-completion/studio-hub-kh`,
 branch `codex/handoff-completion`. Nothing later is marked qualified by this batch.
 Both repairs have RED→GREEN evidence and clean independent review. Root's native
 build/boundary/API/lifecycle rerun passed. Clean `7ec9f89` candidate passed 632
@@ -627,7 +627,7 @@ qualification remain incomplete.
 tracked by [PR #11](https://github.com/theng12/Studio-Hub-KH/pull/11), whose merge
 state and merge commit are authoritative. The preserved worktree is
 `codex/music-package-runtime`, based on `9f25c0310dcbe1223f323da94e845d174e043960`,
-at `/build/.codex/worktrees/music-package-runtime/studio-hub-kh`.
+at `~/.codex/worktrees/music-package-runtime/studio-hub-kh`.
 The coordinator owns packaging, canonical records and integration. The bounded
 worker finished canonical accepted-parameter recovery and terminal-save rollback.
 Independent review found no remaining findings. The clean-commit candidate and
@@ -658,7 +658,7 @@ artifact identity, commands, remaining audit findings and qualification limits.
 `~/Downloads/model-library` (about 38 GiB) and has not been scanned, adopted, moved, or
 modified. `~/StudioHubModels`, `dist`, and a staged build are absent at intake. The Music
 draft remains unintegrated at `0eebc42` on `codex/recovered-music-draft`; its read-only
-audit worktree is `/build/.codex/worktrees/music-recovery-audit/studio-hub-kh`.
+audit worktree is `~/.codex/worktrees/music-recovery-audit/studio-hub-kh`.
 Do not merge it wholesale: its package/engine contract was recovered separately;
 the runtime segment is integrated through PR #11; native workflow integration remains open.
 

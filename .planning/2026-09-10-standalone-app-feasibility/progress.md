@@ -151,7 +151,7 @@ source-bound release checks without weakening the assertion. Local log:
 
 Follow-up framework decision: owner accepted native SwiftUI/AppKit with WKWebView and disclosed no Apple Developer account. Verified Apple membership and Gatekeeper guidance; recorded that paid enrollment is unnecessary for local development/internal testing, while Developer ID/notarization need membership and transferred internal builds may require normal per-app approval. No runtime changes, login registration, enrollment or distribution performed in this discussion turn. Updated the existing design and owner direction only; documentation diff checked.
 
-2026-09-10: Read requested skills. Created isolated planning project at /build/Projects/studiohub-standalone. Initialized PLAN_ID 2026-09-10-standalone-app-feasibility. No source repositories changed. Parent Pinokio instructions inspected in earlier work; launcher creation rules do not apply to this standalone planning project. Existing source graphs will be copied into this project before querying so generated research state stays isolated. Optional first-version Studio scope clarification sent to owner.
+2026-09-10: Read requested skills. Created isolated planning project at ~/Projects/studiohub-standalone. Initialized PLAN_ID 2026-09-10-standalone-app-feasibility. No source repositories changed. Parent Pinokio instructions inspected in earlier work; launcher creation rules do not apply to this standalone planning project. Existing source graphs will be copied into this project before querying so generated research state stays isolated. Optional first-version Studio scope clarification sent to owner.
 
 Saved source commits/versions/status without modifying checkouts. Graphify reflection and runtime query completed against isolated copied graph. Read-only Hub contract inventory delegated to Luna high, deliverable source-linked assumptions and acceptance tests; no implementation.
 
@@ -301,7 +301,7 @@ progress disagreeing with Git. Reconciled without changing application behavior:
   already merged `c0855d4`. The card now records implementation `c0855d4`, integration
   `7aa7775` and DONE. Physical login/logout/reboot remains ST-11.
 - `tests/test_image_bundle.py` computed `BUILD_PYTHON` from `ROOT.parents[1]`, resolving to
-  the nonexistent `/build/.build/voice-runtime/bin/python3`, so the merged tree
+  the nonexistent `~/.build/voice-runtime/bin/python3`, so the merged tree
   could not pass. Fixed to `ROOT / '.build/voice-runtime/bin/python3'`.
 
 Previously unrecorded finished work found during the audit: a **real packaged FLUX.2 Klein
@@ -1344,7 +1344,7 @@ with a complete library and a simple install. Done, verified, no downloads:
   plain archive**. Old kit app was 0.5.6.
 - **KH-STUDIO-UGREEN**: app kit updated the same way; its library grew from 15 to
   **17 packages (50 GB)** with ACE-Step and Stable Audio 3. The legacy Pinokio
-  bootstrap (`studio-mac-bootstrap`, `studio-models`, TerraNash docs) was moved to
+  bootstrap (the kit's bootstrap folder, `studio-models`, the kit's docs) was moved to
   `.retired-pinokio/` so the standalone kit is the only install path.
 - Both kits now carry the fixed `1 - Install the app.command` and the same saved
   voices; `focused-release-manifest.json` regenerated on each (version 0.6.38,
@@ -1400,8 +1400,8 @@ How the full set was assembled, all offline (no downloads):
 - The two music packages (ACE-Step 1.5, Stable Audio 3 Medium) came from the
   owner's `~/StudioHubModels`.
 
-Safety: nothing was deleted. The Pinokio/TerraNash kits on UGREEN, ATLAS and ORICO
-(`studio-mac-bootstrap`, `studio-models`, the TerraNash docs and the fleet marker)
+Safety: nothing was deleted. The Pinokio kits on UGREEN, ATLAS and ORICO
+(the kit's bootstrap folder, `studio-models`, the the kit's docs and the fleet marker)
 were moved to `_trash/` on their own volume. NOVA never had them. `My Stuff` and
 `Documents` were not touched, and NOVA's 153 GB plain archive is untouched.
 
@@ -1805,7 +1805,7 @@ over a non-loopback address; that remains the untested path.
 [MEASURED] Owner asked why the join needs an address guard at all, and asked for "paste
 the IP + port and the token". The guard was real and stricter than it needed to be: it
 demanded a numeric IPv4 **and** an explicit port, so a MagicDNS name
-(`mac.tailnet.ts.net`) was refused outright and `100.64.0.5` without `:47873` was
+(`mac.local`) was refused outright and `100.64.0.5` without `:47873` was
 refused too. Released as **0.6.42** (build `a39d2b7`):
 
 - the **port is optional** - the Hub's port is fixed, so 47873 is assumed;

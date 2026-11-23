@@ -20,11 +20,11 @@ must present the generated token in `X-Studio-Token`, `X-Hub-Token`, a Bearer
 tokens are not supported. Missing remote credentials return JSON 401. A
 browser write with an `Origin` different from the request host returns JSON 403
 before route handling. These rules are defined at
-[`fleet_auth.py:52`](/build/Projects/studiohub-standalone/components/voice/app/backend/fleet_auth.py:52)
+[`fleet_auth.py:52`](~/Projects/studiohub-standalone/components/voice/app/backend/fleet_auth.py:52)
 and the capability manifest states the same auth modes at
-[`fleet_auth.py:100`](/build/Projects/studiohub-standalone/components/voice/app/backend/fleet_auth.py:100).
+[`fleet_auth.py:100`](~/Projects/studiohub-standalone/components/voice/app/backend/fleet_auth.py:100).
 The CORS middleware permits headers but does not override the write guard
-([`main.py:168`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:168)).
+([`main.py:168`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:168)).
 The native shell’s local worker therefore needs no token for its API calls;
 remote Studio Hub/GenStudio calls remain a secondary, token-authenticated
 path and should not be mixed into the local job state.
@@ -40,18 +40,18 @@ Qwen control rosters:
   `device`, `qwen3_preset_speakers`, and
   `qwen3_voice_design_examples` (along with other engine-specific flags).
   The adopted frontend consumes these fields at
-  [`app.js:2569`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2569).
+  [`app.js:2569`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2569).
 * The Qwen CustomVoice roster is nine exact IDs: `Ryan`, `Aiden`, `Serena`,
   `Vivian`, `Uncle_Fu`, `Dylan`, `Eric`, `Ono_Anna`, and `Sohee`. The source
   explains that these come from the model `spk_id` map and that adding phantom
   IDs causes engine rejection at
-  [`generation.py:767`](/build/Projects/studiohub-standalone/components/voice/app/backend/generation.py:767).
+  [`generation.py:767`](~/Projects/studiohub-standalone/components/voice/app/backend/generation.py:767).
 
 Submit `POST /api/generate/txt2speech` with JSON. The request model accepts
 `repo` and non-empty `text` (maximum 40,000 characters), plus common controls
 `language`, `speed`, `temperature`, `seed`, and optional `client_request_id`.
 The exact adopted request model is at
-[`main.py:297`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:297).
+[`main.py:297`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:297).
 For the Qwen subset, send only controls for the selected mode:
 
 | Qwen mode | Required/usable fields | Native control rule |
@@ -61,18 +61,18 @@ For the Qwen subset, send only controls for the selected mode:
 | Base/clone | `repo`, `text`, `voice_library_id`, and the saved reference transcript where required | Only show local voices that still exist; a missing voice ID must be treated as unavailable. |
 
 The adopted web client’s mode-to-field mapping is explicit at
-[`app.js:3038`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3038).
+[`app.js:3038`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3038).
 The backend rejects an unknown repo, a non-TTS model, empty text, an uncached
 model, and cloud-style `provider:` repos before creating a job. The route
 returns `{"job": <serialized job>}`; these checks are at
-[`main.py:1213`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1213).
+[`main.py:1213`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1213).
 
 The native request should send a stable `client_request_id` when a submit may
 be retried after a lost response. The field is accepted by the backend for
 idempotent comparison, although the legacy frontend currently omits it.
 Do not send every model-specific sampling field by default: the legacy client
 sends a large all-engine payload at
-[`app.js:3063`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3063),
+[`app.js:3063`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3063),
 but the native Qwen surface only needs the mode fields above and the common
 controls.
 
@@ -84,7 +84,7 @@ contains `id`, `mode`, `state`, `progress` (0..1), `chunk_index`,
 `resolved_seed`, error/cancellation/finish timestamps, duration, resource and
 quality fields, and final audio metadata such as format, byte size, SHA-256,
 duration, sample rate, and channels. The serializer is at
-[`generation.py:1727`](/build/Projects/studiohub-standalone/components/voice/app/backend/generation.py:1727).
+[`generation.py:1727`](~/Projects/studiohub-standalone/components/voice/app/backend/generation.py:1727).
 The native state should retain the job ID and safe display metadata; treat
 `output_path` as private filesystem data and use `output_url` only after
 `state == "done"`.
@@ -93,21 +93,21 @@ Use `GET /api/generate/stream` for `snapshot` SSE events. Each event data is
 `{ "jobs": [...] }`; the adopted frontend treats `queued`, `running`, and
 `cancel_requested` as active and terminal states as `done`, `error`,
 `cancelled`, or `uncertain` at
-[`app.js:2917`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2917).
+[`app.js:2917`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2917).
 Cancel an active/queued job with `DELETE /api/generate/jobs/{job_id}`. A
 finished job’s audio is streamed by `GET /api/generate/jobs/{job_id}/audio`;
 it returns 425 until the output is ready. `DELETE /api/generate/jobs` clears
 terminal history while keeping files; `DELETE
 /api/generate/history/{job_id}` removes finished history and its audio. The
 routes are grouped at
-[`main.py:1371`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1371).
+[`main.py:1371`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1371).
 
 The worker shares one Metal/unified-memory lock between generation and
 transcription. The native Audio workspace should show the busy state and avoid
 starting an overlapping transcription; queued TTS jobs remain supported.
 `/api/health` reports a safe `busy` boolean, but also contains filesystem paths
 that should not be shown in the UI. See
-[`main.py:415`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:415).
+[`main.py:415`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:415).
 
 ### Transcription workspace: Whisper upload and result
 
@@ -140,7 +140,7 @@ that should not be shown in the UI. See
 ```
 
 The complete field construction, including optional candidate metadata, is at
-[`transcription.py:227`](/build/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:227).
+[`transcription.py:227`](~/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:227).
 The native Transcription state only needs the availability flag, selected
 model, language, word-timestamp capability, and the model list. Enable the
 word-timestamps control only when the selected model says
@@ -155,10 +155,10 @@ audio source:
 Optional fields are `model`, `language`, `word_timestamps`, and `activity_id`.
 The route reads an uploaded file into a temporary file and removes it in a
 `finally` block. Its input contract and cleanup are at
-[`main.py:1541`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1541).
+[`main.py:1541`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1541).
 The adopted frontend uses `file`, optional `model`/`language`, and only sends
 `word_timestamps=true` after the capability check at
-[`app.js:3646`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3646).
+[`app.js:3646`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:3646).
 
 Success returns:
 
@@ -177,33 +177,33 @@ Success returns:
 ```
 
 The canonical result assembly is at
-[`transcription.py:920`](/build/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:920).
+[`transcription.py:920`](~/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:920).
 The native workspace can keep one result object and offer Text, SRT, and VTT
 views/export. A 400 means invalid input or unsupported options, 404 means the
 referenced TTS job/file is missing, and 409 means the chosen model is not
 cached/ready; these mappings are at
-[`main.py:1594`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1594).
+[`main.py:1594`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1594).
 
 ### Local voices and cloning references
 
 `GET /api/voices` returns `{ "voices": [...] }`. Each voice is the serialized
 metadata object plus `transcript`, `audio_url` (`/api/voices/{id}/audio`), and
 `audio_filename`; the source is
-[`main.py:1001`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1001)
-and [`voices.py:114`](/build/Projects/studiohub-standalone/components/voice/app/backend/voices.py:114).
+[`main.py:1001`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1001)
+and [`voices.py:114`](~/Projects/studiohub-standalone/components/voice/app/backend/voices.py:114).
 `GET /api/voices/{voice_id}/audio` streams the stored reference clip.
 
 To add a clone reference, `POST /api/voices` is multipart with required
 `audio`, `name`, `language`, `gender`, and `license`; optional `notes`,
 `source_url`, `transcript`, and `permission_acknowledged` default to empty or
 false. The adopted client sends exactly these fields at
-[`app.js:2091`](/build/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2091).
+[`app.js:2091`](~/Projects/studiohub-standalone/components/voice/app/frontend/app.js:2091).
 The minimum native Audio slice can list and select existing voices; upload and
 metadata editing can remain in the central voice management surface. `PATCH
 /api/voices/{voice_id}` accepts optional metadata fields and an empty string
 clears `notes`, `source_url`, or `transcript`; `DELETE` removes the local clip.
 Those safety-sensitive operations are defined at
-[`main.py:1132`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:1132).
+[`main.py:1132`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:1132).
 F5/Qwen clone requests must not silently use a voice without its required
 transcript; show the missing-transcript state before submit.
 
@@ -224,7 +224,7 @@ and `fit`. The route augments it with:
 * `kind: "local"`.
 
 These are assembled at
-[`main.py:626`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:626).
+[`main.py:626`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:626).
 Filter the Audio workspace to catalog entries whose `capabilities` includes
 `tts`; keep Whisper/STT entries in the Transcription/Models view using their
 separate availability response. A model declaration, `apple_optimized`, or
@@ -243,7 +243,7 @@ Downloads:
 Download serialization has `id`, `repo`, requested revision, `state`, error,
 verified/partial/unverified/observed/total byte counters, `percent`,
 `speed_bps`, `eta_seconds`, and timestamps at
-[`downloads.py:177`](/build/Projects/studiohub-standalone/components/voice/app/backend/downloads.py:177).
+[`downloads.py:177`](~/Projects/studiohub-standalone/components/voice/app/backend/downloads.py:177).
 `percent == 100` is reserved for terminal success; do not display partial
 cache bytes as a completed model.
 
@@ -255,9 +255,9 @@ label/family/type/role/detail, `used_by`, `present`, cache totals, and a
 Models center. It returns 409 while downloads, generation, or transcription
 are active; it also refuses loaded models and dependency packages still used
 by installed models. The route enforces these checks at
-[`main.py:682`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:682),
+[`main.py:682`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:682),
 with path containment/dependency checks in
-[`model_storage.py:314`](/build/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:314).
+[`model_storage.py:314`](~/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:314).
 The UI can offer stale-incomplete cleanup via `DELETE
 /api/cache-maintenance/stale-incomplete/{repo}` only when the inventory says
 the package is partial; it should not implement its own filesystem deletion.
@@ -274,7 +274,7 @@ so one repo can report an active transfer without losing catalog metadata.
 /api/settings` accepts `{hf_token?: string}` and returns the same safe shape.
 The backend stores the token atomically with owner-only `0600` permissions;
 the public serializer never returns the raw token at
-[`settings.py:91`](/build/Projects/studiohub-standalone/components/voice/app/backend/settings.py:91).
+[`settings.py:91`](~/Projects/studiohub-standalone/components/voice/app/backend/settings.py:91).
 `POST /api/settings/test-hf-token` accepts the same token body and returns
 `{ok, name, type, orgs}` or 400; it never returns the token. Native Swift
 state should contain only `tokenSet` and `maskedToken`, and the text field
@@ -285,7 +285,7 @@ should be transient.
 status; do not render `hf_home` or `hub_dir` by default because they are raw
 local paths. `GET /api/system` returns the Apple Silicon/unified-memory
 hardware snapshot used for fit messaging at
-[`main.py:565`](/build/Projects/studiohub-standalone/components/voice/app/backend/main.py:565).
+[`main.py:565`](~/Projects/studiohub-standalone/components/voice/app/backend/main.py:565).
 
 Memory management can be a small Settings section: `GET`/`PUT
 /api/memory-policy` with body `{ "mode": string }`, followed by `POST

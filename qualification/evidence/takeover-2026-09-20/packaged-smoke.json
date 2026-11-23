@@ -1,5 +1,5 @@
 {
-  "app": "/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/dist/Studio Hub.app",
+  "app": "~/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/dist/Studio Hub.app",
   "checks": {
     "job_storage.py": "7c0f6cc8229cbdb288643668f2b70bd9dad08d7a1046209cf77aab597adf56f1",
     "execution_assets.py": "ca520a8d006d8bac84b3158458b5e6fe7316681c46178ea32b1d9c2ece251fea",

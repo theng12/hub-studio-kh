@@ -1,6 +1,6 @@
 {
-  "app": "/build/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "app": "~/Developer/studio-hub-kh/.build/deepseek-proof-r06/Studio Hub.app",
+  "models_dir": "~/StudioHubModels",
   "model": "mlx-community/OmniVoice-bfloat16",
   "text": "The river runs quietly past the old stone bridge, and the morning light settles on the water.",
   "reference": {

@@ -2,7 +2,7 @@
 
 Date: 2026-09-15
 Scope: read-only plan input for `studiohub-standalone` at `29d0baa`, using Hub
-source `/build/pinokio/api/studiohub-mac` at `06e893e` (main), plus
+source `~/pinokio/api/studiohub-mac` at `06e893e` (main), plus
 the already-adopted Voice source. No service, credential, source checkout, or
 planning record was changed.
 
@@ -28,7 +28,7 @@ External GenStudio authority remains unchanged and optional: when enabled, the
 bundled local controller implements the existing authenticated site boundary;
 it does not take global job ownership. The existing contract explicitly assigns
 global authority to GenStudio and local scheduling to the Hub
-([CAPABILITY_CONTRACT.md:73](/build/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:73)).
+([CAPABILITY_CONTRACT.md:73](~/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:73)).
 
 Every setup default is editable **per device**. This includes the generated-file
 limit/retention, model location, foreground/login startup preference, local
@@ -63,64 +63,64 @@ to one device never changes another device's policy.
 1. The Hub lifecycle initializes a durable SQLite ledger, restores broker and
    subtitle batches, starts dispatch, memory control, automatic recovery, and
    fleet storage, then stops them in reverse at shutdown
-   ([main.py:562](/build/pinokio/api/studiohub-mac/app/backend/main.py:562)).
+   ([main.py:562](~/pinokio/api/studiohub-mac/app/backend/main.py:562)).
    Reuse this sequence behind the native app-owned supervisor, replacing
    Pinokio discovery and launchd sibling assumptions.
 2. The broker already grants one shared physical-machine slot across workers,
    has maintenance/drain state, preserves leases, and uses model-specific RAM
    admission. The capability contract explicitly says Image, Voice, and Chat
    on one Mac share one physical slot
-   ([CAPABILITY_CONTRACT.md:105](/build/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:105)).
+   ([CAPABILITY_CONTRACT.md:105](~/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:105)).
 3. `memory_admission.py` already supports Image, Voice, Transcription, Music,
    and Video and carries a measured default for FLUX2 Klein: 8 GB total and
    2 GB free on an Apple-Silicon Mac
-   ([memory_admission.py:21](/build/pinokio/api/studiohub-mac/app/backend/memory_admission.py:21),
-   [memory_admission.py:31](/build/pinokio/api/studiohub-mac/app/backend/memory_admission.py:31)).
+   ([memory_admission.py:21](~/pinokio/api/studiohub-mac/app/backend/memory_admission.py:21),
+   [memory_admission.py:31](~/pinokio/api/studiohub-mac/app/backend/memory_admission.py:31)).
    For this release, retain the FLUX2 Klein rule and make Qwen/VoxCPM/OmniVoice
    and the selected Whisper model explicit effective-policy records after their
    packaged qualification; no new unmeasured hard-coded model table is needed.
 4. `AutomaticRecoveryState` is conservative: it watches exact local Image and
    Voice job state, requires continuous observation plus meaningful stage
    evidence, and turns interrupted recovery into `manual_action_required`
-   ([automatic_recovery.py:40](/build/pinokio/api/studiohub-mac/app/backend/automatic_recovery.py:40),
-   [automatic_recovery.py:91](/build/pinokio/api/studiohub-mac/app/backend/automatic_recovery.py:91)).
+   ([automatic_recovery.py:40](~/pinokio/api/studiohub-mac/app/backend/automatic_recovery.py:40),
+   [automatic_recovery.py:91](~/pinokio/api/studiohub-mac/app/backend/automatic_recovery.py:91)).
    This is the correct recovery posture for a packaged app. Subtitle jobs need
    equivalent durable-state treatment before automatic retry is enabled.
 5. Worker outputs are already exposed only through stable Hub-relative
-   artifact URLs, not worker paths ([broker.py:1391](/build/pinokio/api/studiohub-mac/app/backend/broker.py:1391)).
+   artifact URLs, not worker paths ([broker.py:1391](~/pinokio/api/studiohub-mac/app/backend/broker.py:1391)).
    The Hub persists terminal evidence including byte count, SHA-256, model and
-   runtime revisions ([broker.py:1398](/build/pinokio/api/studiohub-mac/app/backend/broker.py:1398)).
+   runtime revisions ([broker.py:1398](~/pinokio/api/studiohub-mac/app/backend/broker.py:1398)).
    This is the output-index shape to retain.
 6. Existing output-transfer acknowledgement is exactly the needed protection
    primitive: `POST /api/hub/jobs/{batch_id}/items/{item_index}/ack` only marks
    `receipt_acked_at` after the worker accepts the acknowledgement
-   ([main.py:2924](/build/pinokio/api/studiohub-mac/app/backend/main.py:2924)).
+   ([main.py:2924](~/pinokio/api/studiohub-mac/app/backend/main.py:2924)).
    The bundled controller should record the acknowledgement in the unified
    output index, and reclaim only after it where an acknowledgement is required.
 
 ### Observed source: output cleanup and model protection
 
 1. Voice already performs age-first, then oldest-terminal cleanup; it excludes
-   queued/running/cancel-requested jobs ([storage_policy.py:122](/build/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:122),
-   [storage_policy.py:143](/build/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:143)).
+   queued/running/cancel-requested jobs ([storage_policy.py:122](~/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:122),
+   [storage_policy.py:143](~/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:143)).
    Reuse its worker-facing cleanup semantics, but drive candidate eligibility
    from the bundled controller's common index rather than per-worker output
    directories.
 2. Hub `job_storage` serializes cleanup, expires files first, and then removes
    oldest terminal subtitle files until under budget; active subtitle work is
-   explicitly ineligible ([job_storage.py:116](/build/pinokio/api/studiohub-mac/app/backend/job_storage.py:116)).
+   explicitly ineligible ([job_storage.py:116](~/pinokio/api/studiohub-mac/app/backend/job_storage.py:116)).
    Its present scope is only Hub-local subtitle spools, however
-   ([job_storage.py:1](/build/pinokio/api/studiohub-mac/app/backend/job_storage.py:1)).
+   ([job_storage.py:1](~/pinokio/api/studiohub-mac/app/backend/job_storage.py:1)).
 3. `fleet_storage` already aggregates worker status, applies a policy through
    protected worker APIs, and attempts largest reclaimable store first
-   ([fleet_storage.py:177](/build/pinokio/api/studiohub-mac/app/backend/fleet_storage.py:177)).
+   ([fleet_storage.py:177](~/pinokio/api/studiohub-mac/app/backend/fleet_storage.py:177)).
    It defaults to 80 GB and has a narrow retention-choice set, so it cannot be
    copied unchanged for the new 50 GB / arbitrary per-device policy
-   ([fleet_storage.py:21](/build/pinokio/api/studiohub-mac/app/backend/fleet_storage.py:21)).
+   ([fleet_storage.py:21](~/pinokio/api/studiohub-mac/app/backend/fleet_storage.py:21)).
 4. Voice model storage distinguishes model snapshots and required companion
    repositories, marking removal unavailable if an installed model needs the
-   companion ([model_storage.py:101](/build/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:101),
-   [model_storage.py:248](/build/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:248)).
+   companion ([model_storage.py:101](~/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:101),
+   [model_storage.py:248](~/Projects/studiohub-standalone/components/voice/app/backend/model_storage.py:248)).
    Models therefore stay entirely outside output quota/reclaim paths.
 
 ### Observed source: native lifecycle already present
@@ -130,19 +130,19 @@ controller:
 
 - `ShellConfiguration` keeps data and model directories outside the application
   and retains an unavailable external model volume as a visible recovery state
-  ([ShellCore.swift:47](/build/Projects/studiohub-standalone/native/ShellCore.swift:47)).
+  ([ShellCore.swift:47](~/Projects/studiohub-standalone/native/ShellCore.swift:47)).
 - It uses a private single-instance data-directory lock
-  ([ShellCore.swift:136](/build/Projects/studiohub-standalone/native/ShellCore.swift:136)).
+  ([ShellCore.swift:136](~/Projects/studiohub-standalone/native/ShellCore.swift:136)).
 - `StudioController` starts an app-bundled loopback worker with a sanitized
   environment, private log, ready-file/PID validation, and process termination
-  handling ([StudioHub.swift:65](/build/Projects/studiohub-standalone/native/StudioHub.swift:65)).
+  handling ([StudioHub.swift:65](~/Projects/studiohub-standalone/native/StudioHub.swift:65)).
 - `SMAppService.mainApp` is already the native login-startup integration point
-  ([StudioHub.swift:18](/build/Projects/studiohub-standalone/native/StudioHub.swift:18)).
+  ([StudioHub.swift:18](~/Projects/studiohub-standalone/native/StudioHub.swift:18)).
 
 ### Observed source: roles, connection, and token evidence
 
 `control_plane.py` already defines three bounded roles: `standalone`,
-`controller`, and `agent` ([control_plane.py:26](/build/pinokio/api/studiohub-mac/app/backend/control_plane.py:26)).
+`controller`, and `agent` ([control_plane.py:26](~/pinokio/api/studiohub-mac/app/backend/control_plane.py:26)).
 They map cleanly to this app:
 
 | Per-device role | Local behavior | Optional connection behavior |
@@ -152,7 +152,7 @@ They map cleanly to this app:
 | `agent` / worker | Executes jobs from its selected controller and never accepts customer submissions. | A private controller address and enrolment credential are required; agent mode must retain durable, actionable `unreachable`, `token_rejected`, and site-identity mismatch states. |
 
 Existing `accepts_customer_jobs()` already rejects customer submission in agent
-mode ([control_plane.py:205](/build/pinokio/api/studiohub-mac/app/backend/control_plane.py:205)).
+mode ([control_plane.py:205](~/pinokio/api/studiohub-mac/app/backend/control_plane.py:205)).
 Do not create a new fourth "remote override" mode. A device remote override is
 the persisted `parent_controller_url` for `agent`, validated as a credential-free
 private address. Failed connection/identity/auth checks become durable
@@ -161,9 +161,9 @@ local jobs only when the selected role permits it.
 
 The current Hub implementation stores Hub/fleet tokens in owner-only (`0600`)
 data files: Hub-token creation/reuse is in
-[`auth.py:161`](/build/pinokio/api/studiohub-mac/app/backend/auth.py:161),
+[`auth.py:161`](~/pinokio/api/studiohub-mac/app/backend/auth.py:161),
 and fleet-token rotation invalidates cached peer authentication in
-[`peers.py:81`](/build/pinokio/api/studiohub-mac/app/backend/peers.py:81).
+[`peers.py:81`](~/pinokio/api/studiohub-mac/app/backend/peers.py:81).
 It does **not** currently use Keychain. The first release should preserve the
 tested owner-only `0600` secret storage and scope/reveal discipline. Never place
 a token in preferences, log text, error payload, URL/query string, model
@@ -185,9 +185,9 @@ controller mode:
 
 The older Hub's `GET /api/hub/fleet` follows the right read scope: it reports
 `fleet_token_set` and reveals only to loopback or a signed-in owner
-([main.py:4351](/build/pinokio/api/studiohub-mac/app/backend/main.py:4351)).
+([main.py:4351](~/pinokio/api/studiohub-mac/app/backend/main.py:4351)).
 Permanent agent-enrolment codes similarly return no code unless an explicitly
-authorized caller asks for it ([enrollment.py:205](/build/pinokio/api/studiohub-mac/app/backend/enrollment.py:205)).
+authorized caller asks for it ([enrollment.py:205](~/pinokio/api/studiohub-mac/app/backend/enrollment.py:205)).
 Reuse those authorization boundaries, not the older file storage mechanism.
 
 ## Proposed first-release plan: gaps that must be planned, not inherited blindly
@@ -223,7 +223,7 @@ flowchart LR
 workspaces, drafts, results and job filters, backed by independent Voice and
 Subtitle processes/job lifecycles. The current source's same-process shared MLX
 lock is only observed legacy behavior
-([transcription.py:21](/build/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:21));
+([transcription.py:21](~/Projects/studiohub-standalone/components/voice/app/backend/transcription.py:21));
 it is not the final architecture. The Hub controller's shared-node lease and
 memory/storage admission is the final cross-worker safety gate. Image remains a
 separate service/runtime. No worker bypasses controller admission for a native
@@ -250,7 +250,7 @@ separate from a fleet-worker token; rotating one does not revoke unrelated
 queued/running jobs or invalidate the other scope. The controller's GenStudio
 connection token is usable only for the declared capability/job endpoints and header authentication
 (`Authorization: Bearer` or `X-Hub-Token`), matching the existing contract
-([CAPABILITY_CONTRACT.md:16](/build/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:16)).
+([CAPABILITY_CONTRACT.md:16](~/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:16)).
 Browser cookies, URL values, copied Hub dashboard tokens, and model-download
 tokens are not substitutes for it.
 
@@ -287,7 +287,7 @@ the index must never retain an arbitrary client path.
    rather than silently dropping retention evidence.
 6. Run one background sweep after a safe startup delay and periodically while
    the app is running. Existing Voice behavior uses a 60-second delay then an
-   hourly pass ([storage_policy.py:186](/build/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:186)); retain that cadence unless measurement shows a need to change it. Foreground admission remains authoritative, so a delayed sweep never admits an unsafe job.
+   hourly pass ([storage_policy.py:186](~/Projects/studiohub-standalone/components/voice/app/backend/storage_policy.py:186)); retain that cadence unless measurement shows a need to change it. Foreground admission remains authoritative, so a delayed sweep never admits an unsafe job.
 
 ## Proposed acceptance gates for implementing agents
 
@@ -301,7 +301,7 @@ the index must never retain an arbitrary client path.
 - Window close may retain the chosen local service/menu-item behavior; explicit
   Quit drains/cancels according to the durable job state and never replays an
   uncertain job. Existing Voice restart converts in-flight jobs to `uncertain`
-  rather than resuming them ([generation.py:4218](/build/Projects/studiohub-standalone/components/voice/app/backend/generation.py:4218)).
+  rather than resuming them ([generation.py:4218](~/Projects/studiohub-standalone/components/voice/app/backend/generation.py:4218)).
 - Login start is opt-in, uses `SMAppService.mainApp`, and is tested only after
   manual launch/quit/restart works. It starts the app/controller, not five
   legacy launchd services.
@@ -349,7 +349,7 @@ the index must never retain an arbitrary client path.
 ### Optional external contract
 
 - Keep `/api/hub/capabilities` authentication headers and schema/version checks
-  unchanged ([CAPABILITY_CONTRACT.md:16](/build/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:16)).
+  unchanged ([CAPABILITY_CONTRACT.md:16](~/pinokio/api/studiohub-mac/CAPABILITY_CONTRACT.md:16)).
 - Token status, connection diagnostics, capability responses, and exported
   support bundles are secret-free. Test local-owner reveal/copy/rotate and a
   remote caller's rejected reveal attempt. Rotate must invalidate the prior
@@ -368,10 +368,10 @@ the index must never retain an arbitrary client path.
 
 | Existing path | Reuse decision |
 | --- | --- |
-| `POST/GET /api/hub/jobs`, `GET /api/hub/jobs/{batch_id}`, `DELETE /api/hub/jobs/{batch_id}` | Reuse the durable job/lease/cancel semantics; adapt controller routing to bundled workers. Current active summary includes `queued`, `retrying`, `running`, `cancel_requested`, and `uncertain` ([main.py:2321](/build/pinokio/api/studiohub-mac/app/backend/main.py:2321)). |
-| `GET /api/hub/jobs/{batch_id}/items/{item_index}/artifact` | Preserve stable proxy artifact endpoint and terminal SHA-256/byte evidence ([main.py:2381](/build/pinokio/api/studiohub-mac/app/backend/main.py:2381)). |
-| `POST /api/hub/jobs/{batch_id}/items/{item_index}/ack` | Preserve as the external-transfer acknowledgement bridge; map it to `output_records.receipt_acked_at` ([main.py:2924](/build/pinokio/api/studiohub-mac/app/backend/main.py:2924)). |
-| `GET/PUT/DELETE /api/hub/memory-admission` | Reuse effective model-memory policy and persisted operator overrides ([main.py:3248](/build/pinokio/api/studiohub-mac/app/backend/main.py:3248)). |
+| `POST/GET /api/hub/jobs`, `GET /api/hub/jobs/{batch_id}`, `DELETE /api/hub/jobs/{batch_id}` | Reuse the durable job/lease/cancel semantics; adapt controller routing to bundled workers. Current active summary includes `queued`, `retrying`, `running`, `cancel_requested`, and `uncertain` ([main.py:2321](~/pinokio/api/studiohub-mac/app/backend/main.py:2321)). |
+| `GET /api/hub/jobs/{batch_id}/items/{item_index}/artifact` | Preserve stable proxy artifact endpoint and terminal SHA-256/byte evidence ([main.py:2381](~/pinokio/api/studiohub-mac/app/backend/main.py:2381)). |
+| `POST /api/hub/jobs/{batch_id}/items/{item_index}/ack` | Preserve as the external-transfer acknowledgement bridge; map it to `output_records.receipt_acked_at` ([main.py:2924](~/pinokio/api/studiohub-mac/app/backend/main.py:2924)). |
+| `GET/PUT/DELETE /api/hub/memory-admission` | Reuse effective model-memory policy and persisted operator overrides ([main.py:3248](~/pinokio/api/studiohub-mac/app/backend/main.py:3248)). |
 | `GET/PUT/POST /api/hub/storage-policy[/cleanup]` | Replace the current fleet/80-GB behavior with per-device 50-GB output-index policy. Keep name only if maintaining compatibility; expose fields `enabled`, `max_gb`, `retention_days`, `used_bytes`, `protected_bytes`, `reclaimable_bytes`, `over_limit`, and `scope`. |
 | `GET/POST /api/hub/job-storage[/cleanup]` | Do not keep as an independent budget. Fold subtitle spool and final subtitle output accounting into the one device policy; retain explicit cleanup action only as a controller call into the common reclaimer. |
 | Voice `GET/PUT/POST /api/storage-policy[/cleanup]` | Keep worker-level status/reclaim plumbing during transition, but worker cleanup accepts controller-selected output IDs rather than choosing files on its own. |
@@ -414,13 +414,13 @@ clarification; these sources do not resolve that product choice.
 
 Read-only audit baseline: Hub 06e893e1643bffbcbd162fae122e5a4d0f29e283, clean main.
 
-- [control_plane.py](/build/pinokio/api/studiohub-mac/app/backend/control_plane.py:120): roles standalone/controller/agent, site_id/site_name/controller_id and parent_controller_url. Preserve GenStudio global authority and agent rejection of customer queues.
-- [main.py connection setup](/build/pinokio/api/studiohub-mac/app/backend/main.py:1416): setup/check-controller, setup/join and enrollment routes. [enrollment.py](/build/pinokio/api/studiohub-mac/app/backend/enrollment.py:313) validates credential-free HTTP(S) root URLs on private networks. Current enrollment requires a controller peer; changing topology requires an explicit implementation decision.
-- [auth.py](/build/pinokio/api/studiohub-mac/app/backend/auth.py:381): service authentication uses Authorization Bearer or X-Hub-Token headers, not cookies/query parameters. Owner-facing access/fleet token reveal remains separately scoped; preserve token storage protections.
-- [main.py telemetry](/build/pinokio/api/studiohub-mac/app/backend/main.py:1877): resources, summary and stream expose live machine/studio information. [stats route](/build/pinokio/api/studiohub-mac/app/backend/main.py:3945) uses durable ledger aggregates; metrics resource samples are short-lived and are not durable history.
-- [broker.py](/build/pinokio/api/studiohub-mac/app/backend/broker.py:902): retain batch IDs, item indexes, clientRequestId replay/fingerprint and artifact proxy/evidence behavior. Do not expose worker-local paths in customer results.
-- [registry.py](/build/pinokio/api/studiohub-mac/app/backend/registry.py:205): current local registry assumes Image/Voice and fixed ports. Subtitle needs explicit registration/capability/ledger integration; copying the old two-modality mapping is insufficient.
-- [main.py model routes](/build/pinokio/api/studiohub-mac/app/backend/main.py:1848): catalog and broadcast/download exist. Complete-folder import and configured GitHub packages are planned additions, not existing capabilities.
+- [control_plane.py](~/pinokio/api/studiohub-mac/app/backend/control_plane.py:120): roles standalone/controller/agent, site_id/site_name/controller_id and parent_controller_url. Preserve GenStudio global authority and agent rejection of customer queues.
+- [main.py connection setup](~/pinokio/api/studiohub-mac/app/backend/main.py:1416): setup/check-controller, setup/join and enrollment routes. [enrollment.py](~/pinokio/api/studiohub-mac/app/backend/enrollment.py:313) validates credential-free HTTP(S) root URLs on private networks. Current enrollment requires a controller peer; changing topology requires an explicit implementation decision.
+- [auth.py](~/pinokio/api/studiohub-mac/app/backend/auth.py:381): service authentication uses Authorization Bearer or X-Hub-Token headers, not cookies/query parameters. Owner-facing access/fleet token reveal remains separately scoped; preserve token storage protections.
+- [main.py telemetry](~/pinokio/api/studiohub-mac/app/backend/main.py:1877): resources, summary and stream expose live machine/studio information. [stats route](~/pinokio/api/studiohub-mac/app/backend/main.py:3945) uses durable ledger aggregates; metrics resource samples are short-lived and are not durable history.
+- [broker.py](~/pinokio/api/studiohub-mac/app/backend/broker.py:902): retain batch IDs, item indexes, clientRequestId replay/fingerprint and artifact proxy/evidence behavior. Do not expose worker-local paths in customer results.
+- [registry.py](~/pinokio/api/studiohub-mac/app/backend/registry.py:205): current local registry assumes Image/Voice and fixed ports. Subtitle needs explicit registration/capability/ledger integration; copying the old two-modality mapping is insufficient.
+- [main.py model routes](~/pinokio/api/studiohub-mac/app/backend/main.py:1848): catalog and broadcast/download exist. Complete-folder import and configured GitHub packages are planned additions, not existing capabilities.
 
 Preserve the current site-capabilities contract and authenticate its use. Keep stable
 site/node IDs separate from editable labels/IPs. Current read-only audit did not change

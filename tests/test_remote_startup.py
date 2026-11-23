@@ -271,7 +271,7 @@ class ActiveWorkTests(unittest.TestCase):
 class AllowlistTests(unittest.TestCase):
     def test_a_controller_may_relay_and_a_node_may_receive(self) -> None:
         for method, path in (("POST", "/api/hub/startup/request"), ("GET", "/api/hub/startup"),
-                             ("POST", "/api/hub/fleet/nodes/studio-mac-1201-hub/startup")):
+                             ("POST", "/api/hub/fleet/nodes/mac-1201-hub/startup")):
             self.assertTrue(auth.fleet_path_allowed(method, path), path)
 
     def test_the_apps_own_exchange_is_never_a_fleet_route(self) -> None:
@@ -320,13 +320,13 @@ class _FakeClient:
 class RelayTests(_Isolated):
     def setUp(self) -> None:
         super().setUp()
-        fleet_nodes._write({"studio-mac-1201-hub": {
-            "id": "studio-mac-1201-hub", "name": "studio-mac-1201", "address": "http://100.96.171.120:47873",
+        fleet_nodes._write({"mac-1201-hub": {
+            "id": "mac-1201-hub", "name": "mac-1201", "address": "http://100.96.171.120:47873",
             "role": "agent", "studios": [], "joined_at": 1.0, "last_seen_at": 1.0}})
 
     def relay(self, client, payload=None):
         return asyncio.run(fleet_nodes.relay_startup(
-            "studio-mac-1201-hub",
+            "mac-1201-hub",
             payload or {"action": "set_start_services_on_launch", "value": True, "requested_by": "gateway"},
             actor="fleet", client=client))
 
@@ -338,7 +338,7 @@ class RelayTests(_Isolated):
         self.assertEqual(url, "http://100.96.171.120:47873/api/hub/startup/request")
         self.assertEqual(sent, {"action": "restart_services", "force": True, "requested_by": "g"})
         self.assertEqual(answer["state"], "applied")
-        self.assertEqual(answer["node"], "studio-mac-1201-hub")
+        self.assertEqual(answer["node"], "mac-1201-hub")
         self.assertIn("relay", self.audit_events())
 
     def test_the_controller_presents_the_fleet_token_like_every_other_call_to_a_node(self) -> None:

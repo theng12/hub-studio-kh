@@ -8,11 +8,11 @@ INFO:     127.0.0.1:54626 - "POST /api/generate/txt2speech/reference HTTP/1.1" 2
 INFO:     127.0.0.1:54627 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 WARNING:  Invalid HTTP request received.
 INFO:     127.0.0.1:54645 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
-[stt] loading transcription model from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
+[stt] loading transcription model from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
 INFO:     127.0.0.1:54655 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54658 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54674 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
-/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/mlx_audio/stt/models/whisper/whisper.py:704: UserWarning: Could not load WhisperProcessor: Can't load feature extractor for '/build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb'. If you were trying to load it from 'https://huggingface.co/models', make sure you don't have a local directory with the same name. Otherwise, make sure '/build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb' is the correct path to a directory containing a preprocessor_config.json file.
+~/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/site-packages/mlx_audio/stt/models/whisper/whisper.py:704: UserWarning: Could not load WhisperProcessor: Can't load feature extractor for '~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb'. If you were trying to load it from 'https://huggingface.co/models', make sure you don't have a local directory with the same name. Otherwise, make sure '~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb' is the correct path to a directory containing a preprocessor_config.json file.
   warnings.warn(f"Could not load WhisperProcessor: {e}.")
 [stt] mlx-community/whisper-large-v3-turbo ships no processor — attaching tokenizer from openai/whisper-large-v3-turbo
 [stt] transcribing reference.wav with mlx-community/whisper-large-v3-turbo (lang=en, word_ts=True)
@@ -21,7 +21,7 @@ INFO:     127.0.0.1:54675 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 O
 INFO:     127.0.0.1:54676 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 [gen] memory guard: 7.5 GB free, 3.1 GB reserved (model load)
 INFO:     127.0.0.1:54680 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
-[gen] loading mlx-audio model from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit/snapshots/50f45ef0047cde7e84c2ef04326acb8ada2436a7
+[gen] loading mlx-audio model from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit/snapshots/50f45ef0047cde7e84c2ef04326acb8ada2436a7
 INFO:     127.0.0.1:54692 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54696 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54703 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
@@ -29,7 +29,7 @@ INFO:     127.0.0.1:54714 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 O
 INFO:     127.0.0.1:54731 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 [transformers] You are using a model of type `qwen3_tts` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
   Initialized encoder codebooks
-Loaded speech tokenizer from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit/snapshots/50f45ef0047cde7e84c2ef04326acb8ada2436a7/speech_tokenizer
+Loaded speech tokenizer from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit/snapshots/50f45ef0047cde7e84c2ef04326acb8ada2436a7/speech_tokenizer
 [gen] qwen3-tts clone (voice=private-reference) (77 chars)
 [94mText:[0m Studio Hub turns written words into a clear, steady voice for every listener.
 [94mVoice:[0m af_heart
@@ -49,23 +49,23 @@ Processing time:       5.32s
 Peak memory usage:     5.25GB
 Joining 1 audio files
 ✅ Audio successfully generated and saving as: /tmp/mlxaudio_qwen3-tts_4991b1731e6f_xkgdodua/audio.wav
-[gen] qwen3-tts saved WAV at 24000 Hz: /build/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/.4991b1731e6f.7ef07efb07224b229b50e8e8e799b283.partial.wav
-[stt] loading transcription model from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
+[gen] qwen3-tts saved WAV at 24000 Hz: ~/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/.4991b1731e6f.7ef07efb07224b229b50e8e8e799b283.partial.wav
+[stt] loading transcription model from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
 [stt] mlx-community/whisper-large-v3-turbo ships no processor — attaching tokenizer from openai/whisper-large-v3-turbo
 [stt] transcribing .4991b1731e6f.7ef07efb07224b229b50e8e8e799b283.partial.wav with mlx-community/whisper-large-v3-turbo (lang=en, word_ts=True)
 INFO:     127.0.0.1:54789 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54804 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
-[gen] done 4991b1731e6f → /build/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/4991b1731e6f.wav
+[gen] done 4991b1731e6f → ~/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/4991b1731e6f.wav
 INFO:     127.0.0.1:54830 - "GET /api/generate/jobs/4991b1731e6f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54831 - "GET /api/generate/jobs/4991b1731e6f/audio HTTP/1.1" 200 OK
 [gen] starting 195fc324ad7f: repo=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit text_chars=77 private_reference=True
 INFO:     127.0.0.1:54832 - "POST /api/generate/txt2speech/reference HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54833 - "GET /api/generate/jobs/195fc324ad7f HTTP/1.1" 200 OK
 [gen] memory guard: 9.8 GB free, 4.2 GB reserved (model load)
-[gen] loading mlx-audio model from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit/snapshots/e7dd0585652209fa0d7783659aad4e8a324de11c
+[gen] loading mlx-audio model from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit/snapshots/e7dd0585652209fa0d7783659aad4e8a324de11c
 [transformers] You are using a model of type `qwen3_tts` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
   Initialized encoder codebooks
-Loaded speech tokenizer from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit/snapshots/e7dd0585652209fa0d7783659aad4e8a324de11c/speech_tokenizer
+Loaded speech tokenizer from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit/snapshots/e7dd0585652209fa0d7783659aad4e8a324de11c/speech_tokenizer
 [gen] qwen3-tts clone (voice=private-reference) (77 chars)
 [94mText:[0m Studio Hub turns written words into a clear, steady voice for every listener.
 [94mVoice:[0m af_heart
@@ -85,19 +85,19 @@ Processing time:       5.63s
 Peak memory usage:     6.37GB
 Joining 1 audio files
 ✅ Audio successfully generated and saving as: /tmp/mlxaudio_qwen3-tts_195fc324ad7f_6yi1oz19/audio.wav
-[gen] qwen3-tts saved WAV at 24000 Hz: /build/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/.195fc324ad7f.65ae3f5af59843eebb8e12bfff48c630.partial.wav
-[stt] loading transcription model from /build/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
+[gen] qwen3-tts saved WAV at 24000 Hz: ~/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/.195fc324ad7f.65ae3f5af59843eebb8e12bfff48c630.partial.wav
+[stt] loading transcription model from ~/Projects/studiohub-standalone/.build/st04-real-proof/library/hub/models--mlx-community--whisper-large-v3-turbo/snapshots/a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb
 INFO:     127.0.0.1:54883 - "GET /api/generate/jobs/195fc324ad7f HTTP/1.1" 200 OK
 [stt] mlx-community/whisper-large-v3-turbo ships no processor — attaching tokenizer from openai/whisper-large-v3-turbo
 [stt] transcribing .195fc324ad7f.65ae3f5af59843eebb8e12bfff48c630.partial.wav with mlx-community/whisper-large-v3-turbo (lang=en, word_ts=True)
 INFO:     127.0.0.1:54892 - "GET /api/generate/jobs/195fc324ad7f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54895 - "GET /api/generate/jobs/195fc324ad7f HTTP/1.1" 200 OK
-[gen] done 195fc324ad7f → /build/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/195fc324ad7f.wav
+[gen] done 195fc324ad7f → ~/Projects/studiohub-standalone/.build/st04-real-proof/state/voice/output/195fc324ad7f.wav
 INFO:     127.0.0.1:54899 - "GET /api/generate/jobs/195fc324ad7f HTTP/1.1" 200 OK
 INFO:     127.0.0.1:54900 - "GET /api/generate/jobs/195fc324ad7f/audio HTTP/1.1" 200 OK
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
 INFO:     Finished server process [66364]
-/build/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/multiprocessing/resource_tracker.py:279: UserWarning: resource_tracker: There appear to be 13 leaked semaphore objects to clean up at shutdown
+~/Projects/studiohub-standalone/.build/voice-runtime/lib/python3.12/multiprocessing/resource_tracker.py:279: UserWarning: resource_tracker: There appear to be 13 leaked semaphore objects to clean up at shutdown
   warnings.warn('resource_tracker: There appear to be %d '

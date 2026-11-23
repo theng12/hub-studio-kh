@@ -3,7 +3,7 @@
 The Dreamlands chapter in the TTS calibration ended with a "***" scene-break line. The splitter cut it
 into its own 3-character section; Qwen3-TTS 0.6B wrote no audio for it on every Mac (Gateway jobs
 0ce0b966 and 0cf938c6), the error blamed memory (on a 17 GB Mac with 7.5 GB free too), and the Hub
-paused the model on studio-mac-1305 and -1408 as if the model were broken.
+paused the model on mac-1305 and -1408 as if the model were broken.
 """
 from __future__ import annotations
 

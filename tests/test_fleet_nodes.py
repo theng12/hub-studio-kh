@@ -626,11 +626,11 @@ class NodeStatusAndLabelTest(unittest.TestCase):
         self.assertIsNone(fleet_nodes.revoked_refusal(sold["credential"]))
 
     def test_a_rename_on_the_mac_updates_the_roster_name(self) -> None:
-        self._join("studio-mac-1102-x", "studio-mac-1102")
-        self.assertTrue(fleet_nodes.rename("studio-mac-1102-x", "studio-mac-1501"))
-        self.assertEqual(fleet_nodes._read()["studio-mac-1102-x"]["name"], "studio-mac-1501")
-        self.assertFalse(fleet_nodes.rename("studio-mac-1102-x", "studio-mac-1501"))
-        self.assertFalse(fleet_nodes.rename("studio-mac-1102-x", "   "))
+        self._join("mac-1102-x", "mac-1102")
+        self.assertTrue(fleet_nodes.rename("mac-1102-x", "mac-1501"))
+        self.assertEqual(fleet_nodes._read()["mac-1102-x"]["name"], "mac-1501")
+        self.assertFalse(fleet_nodes.rename("mac-1102-x", "mac-1501"))
+        self.assertFalse(fleet_nodes.rename("mac-1102-x", "   "))
         self.assertFalse(fleet_nodes.rename("nobody", "x"))
 
     def test_never_connected_needs_a_day_and_no_answer_since_joining(self) -> None:
@@ -666,12 +666,12 @@ class TheNodeIdentityStopsFollowingTheHostnameTest(unittest.TestCase):
 
     def test_the_first_id_is_kept_when_the_hostname_changes(self) -> None:
         from unittest import mock
-        with mock.patch("socket.gethostname", return_value="studio-mac-1102.local"):
+        with mock.patch("socket.gethostname", return_value="mac-1102.local"):
             self.control_plane.ensure_controller_id()
         self.control_plane._settings_cache = None
-        with mock.patch("socket.gethostname", return_value="studio-mac-1501.local"):
+        with mock.patch("socket.gethostname", return_value="mac-1501.local"):
             self.assertEqual(self.control_plane.load_settings()["controller_id"],
-                             "studio-mac-1102-hub")
+                             "mac-1102-hub")
 
     def test_a_damaged_settings_file_is_left_alone(self) -> None:
         self.control_plane.SETTINGS_FILE.write_text("{not json")

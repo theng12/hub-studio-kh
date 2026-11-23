@@ -9,7 +9,7 @@ it or named as a repo file to read first.
 
 You are continuing **ST-14 — local Chat/LLM Studio** in the Studio Hub KH standalone app.
 
-**Workspace:** `/build/Developer/studio-hub-kh` (macOS, Apple Silicon).
+**Workspace:** `~/Developer/studio-hub-kh` (macOS, Apple Silicon).
 
 **Read these first, in order:**
 1. `AGENTS.md` — project scope and working rules (mandatory).
@@ -112,7 +112,7 @@ change.
 
 **Verify before you claim anything:**
 ```sh
-cd /build/Developer/studio-hub-kh
+cd ~/Developer/studio-hub-kh
 .build/voice-runtime/bin/python3 -m unittest tests.test_chat_worker tests.test_chat_worker_cli \
   tests.test_chat_hub_wiring tests.test_chat_packaging tests.test_chat_native_wiring
 .build/voice-runtime/bin/python3 -m unittest tests.test_peer_path_contract tests.test_model_manifest_catalog

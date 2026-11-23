@@ -10,7 +10,7 @@
     "swap": "total = 5120.00M  used = 4023.81M  free = 1096.19M  (encrypted)"
   },
   "request": {
-    "model_dir": "/build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model",
+    "model_dir": "~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model",
     "gemma_model": "mlx-community/gemma-3-12b-it-4bit",
     "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
     "image": "qualification/scene.png",
