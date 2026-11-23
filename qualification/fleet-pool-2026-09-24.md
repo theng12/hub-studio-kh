@@ -90,9 +90,9 @@ own roster: controller, 1 node(s)
 ===== what the app shows on the NODE =====
 role: agent | origin: adopted
 overview role: agent | member: true | roster readable: true
-controller: build-mac | reachable | http://127.0.0.1:62102
+controller: controller-mac | reachable | http://127.0.0.1:62102
   row: local       | This Mac            | agent      | reachable: true | -
-  row: control-mac | build-mac | controller | reachable: true | http://127.0.0.1:62102
+  row: control-mac | controller-mac | controller | reachable: true | http://127.0.0.1:62102
 own roster: agent, 0 node(s)
 ```
 
