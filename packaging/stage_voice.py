@@ -110,15 +110,17 @@ VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 # f44dbc4a5c1e4b45fdff77487c031dfe9dfb14006c299083067e9b2b19dff147, evidence in Hub Lead 004's
 # receipt). Earlier values stay in git history.
 #
-# **Re-qualified 2026-11-23**, at 0.6.258. The 2026-11-21 tree above cannot be reproduced: it was
+# **Re-qualified 2026-11-24**, at 0.6.258. The 2026-11-21 tree above cannot be reproduced: it was
 # built by an older uv/CPython toolchain that no longer produces the same files here, and no copy of
-# it survives to compare against, so a gate rebuilt from the tracked recipes refuses the pinned
-# digest. The tree these recipes build today was qualified instead, by a real generation on this Mac
-# (8.0 s, 48 kHz stereo, 3,071,576 bytes, sha256
-# f9eee3692ceb72ecb2695855b7342fe1767763f3177c138a6aeda0367ae3f86d; evidence and the old value in
-# lead/release-0.6.258-20261123/RECEIPT.md). This changes which qualified tree ships, not what the
-# runtime contains.
-YUE2_RUNTIME_SHA256 ='6e3c18298c897a78aa9b621424175353f38168e742bcccc330acae5024a877a4'
+# it survives to compare against. The first replacement was worse than a mismatch: the tree already
+# sitting in `.build` was a build whose log stopped after `uv pip install`, so it kept 21
+# `/Users/<name>` records in its generated sysconfig and one in `libpython`'s install name — the
+# home-path gate check found both (run 9), and `rebuild_build_inputs` now refuses such a tree. The
+# tree the tracked builder produces is the qualified one: `neutralize_prefix.py` rewrites both
+# carriers, and a real generation on this Mac passed (8.0 s, 48 kHz stereo, 3,071,576 bytes, sha256
+# 44a4481e1fd660e647fedbc9493268f0cacb505c6c58a82e08cfa714daef5f69). Earlier values stay in git
+# history; evidence in lead/release-0.6.258-20261123/RECEIPT.md.
+YUE2_RUNTIME_SHA256 ='e2e4d1df8233d269aacecd916e225f3823865ec063ee32f24acfd373e463f3b5'
 
 # What a Hub release ships, declared here so a build cannot quietly narrow it.
 #
