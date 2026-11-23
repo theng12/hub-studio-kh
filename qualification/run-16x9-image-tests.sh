@@ -15,7 +15,7 @@
 # get today. Z-Image runs on mflux 0.20.0, the version it was qualified on. The versions are
 # recorded per run.
 set -u
-ROOT=~/Developer/studio-hub-kh
+ROOT="$HOME/Developer/_orchestra/developer-media/hub-studio-kh/app"
 export PATH="$HOME/.local/bin:$PATH"
 OUT="$HOME/Desktop/StudioHub Image Text Review"
 MEASURE="$ROOT/.build/text-tests/measure-image-memory.sh"   # the shared memory recorder

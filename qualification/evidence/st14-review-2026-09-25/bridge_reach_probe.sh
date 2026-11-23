@@ -2,7 +2,7 @@
 # ST-14.8 review — is the chat lane reachable on the Hub surface the gateway-kh adapter uses?
 # GETs only: no model is loaded.
 set -u
-ROOT=~/Developer/studio-hub-kh
+ROOT="$HOME/Developer/_orchestra/developer-media/hub-studio-kh/app"
 RES="$ROOT/.build/StudioHub-0662/Hub Studio KH.app/Contents/Resources"
 PY="$RES/runtimes/voice/bin/python3"
 OUT="$ROOT/.build/chat-review-2026-09-25"
