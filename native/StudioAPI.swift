@@ -9173,7 +9173,7 @@ final class NativeWorkspaceStore: ObservableObject {
     ///
     /// Accepts an address with a port, an address on its own (the Hub's port is fixed, so the
     /// port is assumed), an `http://` prefix, and a name such as
-    /// `mac.tailnet.ts.net:47873`. A name is allowed because MagicDNS is the natural thing
+    /// `mac.local:47873`. A name is allowed because MagicDNS is the natural thing
     /// to type on a tailnet; what is refused is an address that is not private - the check
     /// exists so this Mac is never pointed at an arbitrary host on the internet, and a name is
     /// held to the same rule by resolving it first.

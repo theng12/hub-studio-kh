@@ -1,5 +1,5 @@
 {
-  "app": "/build/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/StudioHubReviewed.app",
+  "app": "~/.codex/worktrees/music-package-runtime/studio-hub-kh/.build/StudioHubReviewed.app",
   "tree_sha256": "f89885aee5e2c64844961f558d7bc947819a3ffe4d31b760e768d54549c1f837",
   "identity": {
     "version": "0.6.38",

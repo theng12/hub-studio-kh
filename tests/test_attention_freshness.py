@@ -134,13 +134,13 @@ class RelayReach(Fixture):
         # token and the controller relays with the same one, so this one allowlist line is both hops.
         from components.hub.backend import auth
         self.assertTrue(auth.fleet_path_allowed(
-            "GET", "/api/hub/fleet/nodes/studio-mac-1102-x/attention"))
+            "GET", "/api/hub/fleet/nodes/mac-1102-x/attention"))
         self.assertTrue(auth.fleet_path_allowed("GET", "/api/hub/fleet/nodes/local/attention"))
         # Reaching a Mac's attention grants nothing else on that path.
         self.assertFalse(auth.fleet_path_allowed(
-            "POST", "/api/hub/fleet/nodes/studio-mac-1102-x/attention"))
+            "POST", "/api/hub/fleet/nodes/mac-1102-x/attention"))
         self.assertFalse(auth.fleet_path_allowed(
-            "GET", "/api/hub/fleet/nodes/studio-mac-1102-x/attention/extra"))
+            "GET", "/api/hub/fleet/nodes/mac-1102-x/attention/extra"))
 
 
 if __name__ == "__main__":

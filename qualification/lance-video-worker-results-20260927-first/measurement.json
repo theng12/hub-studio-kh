@@ -88,7 +88,7 @@
     "finished_at": 1790480460.18771,
     "generated_at": 1790480460.18771,
     "duration_seconds": 329.4778718948364,
-    "output_path": "/build/Developer/studio-hub-kh/qualification/lance-video-worker-results-20260927-first/state/outputs/0f259095f44a4c03958e64119f435b47.mp4",
+    "output_path": "~/Developer/studio-hub-kh/qualification/lance-video-worker-results-20260927-first/state/outputs/0f259095f44a4c03958e64119f435b47.mp4",
     "output_url": "/api/generate/jobs/0f259095f44a4c03958e64119f435b47/video",
     "sha256": "d7bcdcf93b5e3051a2fb6548caf82349d8d0d6547b901ef7710922f6b7a1cb60",
     "bytes": 276726,

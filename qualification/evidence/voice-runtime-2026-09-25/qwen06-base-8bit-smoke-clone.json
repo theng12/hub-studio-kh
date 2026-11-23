@@ -1,6 +1,6 @@
 {
-  "app": "/build/Developer/studio-hub-kh/.build/StudioHub-0661/Studio Hub.app",
-  "models_dir": "/build/StudioHubModels",
+  "app": "~/Developer/studio-hub-kh/.build/StudioHub-0661/Studio Hub.app",
+  "models_dir": "~/StudioHubModels",
   "model": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
   "text": "This is a standalone Voice Studio test. The bundled engine is speaking clearly.",
   "params": {

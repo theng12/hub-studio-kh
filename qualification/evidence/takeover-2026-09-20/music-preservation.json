@@ -1,6 +1,6 @@
 {
   "source_commit": "415df68d35c628cf77893fa6550f75b160f4221b",
-  "recovery_worktree": "/build/.codex/worktrees/studiohub-music-recovery/studiohub-standalone",
+  "recovery_worktree": "~/.codex/worktrees/studiohub-music-recovery/studiohub-standalone",
   "files": [
     {
       "path": "components/hub/backend/activity.py",

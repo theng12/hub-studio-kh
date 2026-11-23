@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source": {
-    "repository": "/build/pinokio/api/imagestudio-mac",
+    "repository": "~/pinokio/api/imagestudio-mac",
     "upstream_repository": "https://github.com/theng12/imagestudio-mac",
     "commit": "36f88a0bc0abc07e3d7a8cf04424ab5336501827",
     "version": "1.32.2",

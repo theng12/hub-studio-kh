@@ -2,7 +2,7 @@
 
 Date: 2026-09-15
 Standalone worktree: `implementation/st-02` at baseline `c16833c`
-Adopted Hub source: `/build/pinokio/api/studiohub-mac` at
+Adopted Hub source: `~/pinokio/api/studiohub-mac` at
 `06e893e1643bffbcbd162fae122e5a4d0f29e283`
 
 ## Result
@@ -23,9 +23,9 @@ cases in a child interpreter so their module-level state paths cannot pollute
 the other tests. Run it from the standalone worktree:
 
 ```sh
-PYTHONPATH=/build/Projects/studiohub-standalone/.build/test-deps \
+PYTHONPATH=~/Projects/studiohub-standalone/.build/test-deps \
 PYTHONDONTWRITEBYTECODE=1 \
-/build/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 \
+~/Projects/studiohub-standalone/.build/voice-runtime/bin/python3 \
 -m pytest -q tests/hub_regression
 ```
 

@@ -3,7 +3,7 @@
 Owner rule, 2026-11-15: every wait is bounded by its own ceiling, and past the bound it fails
 retryable with the reason. The machine-reservation wait had no clock: a refusal restored the
 item's tries every time, so MAX_TRIES could never end it and eleven jobs sat 137 minutes on
-studio-mac-1200 (2026-11-18).
+mac-1200 (2026-11-18).
 """
 import unittest
 

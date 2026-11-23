@@ -1,8 +1,8 @@
 # Session dirty-state routing — 2026-09-24
 
-Verified read-only against `/build/Developer/studio-hub-kh` on branch
+Verified read-only against `~/Developer/studio-hub-kh` on branch
 `implementation/voice-runtime` at HEAD `9756528`, with the second worktree
-`/build/Developer/studio-hub-kh-hotfix-0656` on branch `hotfix-0.6.56`. The
+`~/Developer/studio-hub-kh-hotfix-0656` on branch `hotfix-0.6.56`. The
 image session was actively concluding during this verification, so `hotfix-0.6.56`
 advanced from `7f6e663` to `013eb7e` and the six image research notes left this shared
 tree's untracked set while the note was being written. The shared checkout remains one

@@ -361,7 +361,8 @@ struct CaptureJobsTabs {
             fatalError("Could not encode composite PNG")
         }
 
-        let outDir = "/build/Desktop/All YouTube Stuff/Hub Jobs tabs"
+        let outDir = ProcessInfo.processInfo.environment["HUB_CAPTURE_OUT"]
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("hub-jobs-tabs").path
         try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
         let outPath = "\(outDir)/hub-jobs-tabs-before-after.png"
 

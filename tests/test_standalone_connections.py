@@ -2444,27 +2444,27 @@ class LeavingAndRemovalAreRealTest(unittest.TestCase):
         fleet = (hub.data / ".fleet_token").read_text().strip()
         _, joined, _ = hub.post_json(
             "/api/hub/fleet/nodes",
-            {"node_id": "studio-mac-1102-x", "name": "studio-mac-1102",
+            {"node_id": "mac-1102-x", "name": "mac-1102",
              "address": "http://127.0.0.1:9"}, token=fleet)
         _, other, _ = hub.post_json(
             "/api/hub/fleet/nodes",
             {"node_id": "studio-3", "name": "Studio 3", "address": "http://127.0.0.1:9"},
             token=fleet)
         own = joined["credential"]
-        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status", token=own)
+        status, body, _ = hub.request("/api/hub/fleet/nodes/mac-1102-x/status", token=own)
         self.assertEqual((status, body["state"]), (200, "member"))
         # A node may not ask about another Mac.
         status, _, _ = hub.request("/api/hub/fleet/nodes/studio-3/status", token=own)
         self.assertEqual(status, 403)
         # Its label reaches the controller's roster when it asks; nobody else may set it.
-        hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status?name=studio-mac-1501", token=own)
+        hub.request("/api/hub/fleet/nodes/mac-1102-x/status?name=mac-1501", token=own)
         hub.request("/api/hub/fleet/nodes/studio-3/status?name=hijacked", token=fleet)
         _, listing, _ = hub.request("/api/hub/fleet/nodes", token=hub.token)
         names = {row["id"]: row["name"] for row in listing["nodes"]}
-        self.assertEqual(names, {"studio-mac-1102-x": "studio-mac-1501", "studio-3": "Studio 3"})
+        self.assertEqual(names, {"mac-1102-x": "mac-1501", "studio-3": "Studio 3"})
         # The operator removes it: the Mac, holding only the group token now, hears `removed`.
-        hub.request("/api/hub/fleet/nodes/studio-mac-1102-x", method="DELETE", token=hub.token)
-        status, body, _ = hub.request("/api/hub/fleet/nodes/studio-mac-1102-x/status", token=fleet)
+        hub.request("/api/hub/fleet/nodes/mac-1102-x", method="DELETE", token=hub.token)
+        status, body, _ = hub.request("/api/hub/fleet/nodes/mac-1102-x/status", token=fleet)
         self.assertEqual((status, body["state"]), (200, "removed"))
         self.assertIn("removed this Mac on", body["detail"])
         status, body, _ = hub.request("/api/hub/fleet/nodes/nobody/status", token=fleet)

@@ -1,7 +1,7 @@
 # R01 — Native lifecycle repair brief
 
 Base: `0ec3b3b09c9642b670ec0a092f4223ea4ffe0e24` (plan-only child of `1267a51`).
-Work only in `/build/.codex/worktrees/handoff-completion/studio-hub-kh`.
+Work only in `~/.codex/worktrees/handoff-completion/studio-hub-kh`.
 Read AGENTS and the canonical task_plan.md Global constraints, Review focus and R01.
 
 GOAL: reproduce and minimally fix N-01/N-02/N-03 in the existing native lifecycle.

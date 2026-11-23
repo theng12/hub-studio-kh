@@ -3,13 +3,13 @@
 Last updated: 2026-09-22 13:05 +07
 Owner: DeepSeek (autonomous takeover)
 Canonical plan: `.planning/2026-09-10-standalone-app-feasibility/` (export
-`PWF_PLAN_ROOT=/build/Developer/studio-hub-kh`,
+`PWF_PLAN_ROOT=~/Developer/studio-hub-kh`,
 `PLAN_ID=2026-09-10-standalone-app-feasibility`). This file is an index, not a
 second planning system.
 
 ## Repository / worktree state
 
-- Local repo: `/build/Developer/studio-hub-kh`
+- Local repo: `~/Developer/studio-hub-kh`
 - Branch: `implementation/voice-runtime`
 - Base commit (takeover): `9a4570da57cb9109cd7da1d06d2197f923a71139` (PR #13 merged)
 - Current HEAD: `ffe3315` (main too); installed app build `ffe3315`
@@ -29,7 +29,7 @@ second planning system.
 - Local inputs (ignored, preserved): `.build/voice-runtime`, `.build/test-deps`,
   `.build/st03-image-runtime-worker`, `.build/music-engine-source`, `.build/uv-cache`,
   `.build/downloads`, and the Music runtime worktree overlay.
-- Protected, untouched: `/build/Downloads/model-library`,
+- Protected, untouched: `~/Downloads/model-library`,
   `/Applications/Studio Hub.app` and its running processes, installed state,
   Pinokio machines, GatewayKH checkout (read-only).
 
@@ -157,7 +157,7 @@ second planning system.
 ## RESUME STUDIO HUB
 
 Timestamp: 2026-09-22 12:05 +07
-Repository / worktree: `/build/Developer/studio-hub-kh` (main checkout)
+Repository / worktree: `~/Developer/studio-hub-kh` (main checkout)
 Branch: `implementation/voice-runtime`
 Current HEAD: `539b7fa`; installed app build `b4db781` (`development_build:false`)
 Uncommitted changes: none.
@@ -165,7 +165,7 @@ Current packet: **all four SSDs carry the full library and pass their kit verifi
 - KH-STUDIO-NOVA / UGREEN / ATLAS / ORICO: app 0.6.38 (b4db781), fixed installer,
   35 of 35 catalogue packages `files_verified` (ATLAS and ORICO also carry f5-tts,
   which the catalogue does not list), kit verifier PASS, 0 quarantined files.
-- Nothing deleted: Pinokio/TerraNash kits moved to `_trash/` on UGREEN, ATLAS and
+- Nothing deleted: Pinokio kits moved to `_trash/` on UGREEN, ATLAS and
   ORICO. `My Stuff`/`Documents` untouched; NOVA's 153 GB plain archive untouched.
 - `.build/prepare-kit.sh <volume>` prepares any future drive in one step.
 Also complete this session: two music engines (ACE-Step + Stable Audio 3; ACE-Step was retired in 0.6.116, music is now YuE2 + Stable Audio 3), the

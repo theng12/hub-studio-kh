@@ -1,20 +1,20 @@
 {
   "hub": {
-    "path": "/build/pinokio/api/studiohub-mac",
+    "path": "~/pinokio/api/studiohub-mac",
     "adopted_or_reference_baseline": "e74ff728654d4c2ac6707b1655b1382451c30d6e",
     "observed_final_commit": "e74ff728654d4c2ac6707b1655b1382451c30d6e",
     "working_tree_status": "",
     "changed_since_initial_read": false
   },
   "image": {
-    "path": "/build/pinokio/api/imagestudio-mac",
+    "path": "~/pinokio/api/imagestudio-mac",
     "adopted_or_reference_baseline": "207e788ff3b9bb9b173ffe773691f571b567b79f",
     "observed_final_commit": "207e788ff3b9bb9b173ffe773691f571b567b79f",
     "working_tree_status": "",
     "changed_since_initial_read": false
   },
   "voice": {
-    "path": "/build/pinokio/api/voicestudio-mac.git",
+    "path": "~/pinokio/api/voicestudio-mac.git",
     "adopted_or_reference_baseline": "154e7390fcee942ca6bbbcd326fcf9027b37404d",
     "observed_final_commit": "b0df1802cef64d150c6155c514bc0572c7cc5010",
     "working_tree_status": "",

@@ -2,7 +2,7 @@
   "schema": "studiohub.video-worker-run.v1",
   "started_at": "2026-09-26T21:07:21+0700",
   "args": {
-    "models_dir": "/build/StudioHubModels",
+    "models_dir": "~/StudioHubModels",
     "data_dir": "None",
     "repo": "baa-ai/LTX-2.3-22B-RAM-12GB-MLX",
     "prompt": "A slow, steady camera push toward a quiet harbour at dawn.",
@@ -17,7 +17,7 @@
     "status": "ok",
     "job_id": "627c7fbc3aef49e8a06c26fab7be0144",
     "artifact": {
-      "path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/generated.mp4",
+      "path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/generated.mp4",
       "http_bytes": 1784058,
       "declared_bytes": 1784058,
       "declared_sha256": "bbbf75f8c747cc36109994b1f83624d9e1769a66a0520b57526f7c59455dc982",
@@ -34,8 +34,8 @@
     }
   },
   "library": {
-    "models_dir": "/build/StudioHubModels",
-    "folder": "/build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
+    "models_dir": "~/StudioHubModels",
+    "folder": "~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203"
   },
   "finished_at": "2026-09-26T21:12:35+0700",
   "acceptance": {
@@ -55,7 +55,7 @@
       "frames": 97,
       "frame_rate": 24,
       "seed": -1,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/uploads/191d07945f28424584b8d53271c6b731.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/uploads/191d07945f28424584b8d53271c6b731.png"
     }
   },
   "job": {
@@ -74,7 +74,7 @@
       "frames": 97,
       "frame_rate": 24,
       "seed": -1,
-      "image_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/uploads/191d07945f28424584b8d53271c6b731.png"
+      "image_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/uploads/191d07945f28424584b8d53271c6b731.png"
     },
     "state": "done",
     "progress": 1.0,
@@ -84,7 +84,7 @@
     "finished_at": 1790431953.79693,
     "generated_at": 1790431953.79693,
     "duration_seconds": 304.0033149719238,
-    "output_path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/outputs/627c7fbc3aef49e8a06c26fab7be0144.mp4",
+    "output_path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/state/outputs/627c7fbc3aef49e8a06c26fab7be0144.mp4",
     "output_url": "/api/generate/jobs/627c7fbc3aef49e8a06c26fab7be0144/video",
     "sha256": "bbbf75f8c747cc36109994b1f83624d9e1769a66a0520b57526f7c59455dc982",
     "bytes": 1784058,
@@ -101,7 +101,7 @@
     "model_revision": "d8a9d2f6081c4136130983a0b612962418ddf203",
     "runtime_revision": "verification-run",
     "quantization_loader": "pack_generate.py:_patch_pipeline_quantization",
-    "gemma_model_path": "/build/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
+    "gemma_model_path": "~/StudioHubModels/gemma-3-12b-it-4bit/86cc6a8dedbc456dd0e4af01a9d09f396f77e558/model",
     "memory_mode": "default",
     "peak_mlx_bytes": 14163847570,
     "peak_process_rss_bytes": 8489582592,
@@ -113,7 +113,7 @@
     "acknowledged": false
   },
   "artifact": {
-    "path": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/generated.mp4",
+    "path": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260926-210721/generated.mp4",
     "http_bytes": 1784058,
     "declared_bytes": 1784058,
     "declared_sha256": "bbbf75f8c747cc36109994b1f83624d9e1769a66a0520b57526f7c59455dc982",

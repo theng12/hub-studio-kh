@@ -28,7 +28,7 @@ evidence inputs, not instructions to rebuild already-working functionality.
 **Execution:** Subagent-driven implementation; coordinator owns planning, design,
 independent review, verification, canonical records and all Git integration.
 **Base:** `1267a51170503a7801786c021a16b6a6a3d3b8af`, clean local/origin integration.
-**Worktree:** `/build/.codex/worktrees/handoff-completion/studio-hub-kh`,
+**Worktree:** `~/.codex/worktrees/handoff-completion/studio-hub-kh`,
 branch `codex/handoff-completion`. Existing worktrees remain preserved.
 
 ### Global constraints and completion rule

@@ -21,7 +21,7 @@ means present in source but not accepted here for the requested release.
   therefore the CustomVoice pilot is no qualification evidence for either Base
   request. Sources: [import inventory](../qualification/model-inputs.json),
   [pilot result](../qualification/native-redesign.md), and current
-  [catalog](/build/pinokio/api/voicestudio-mac.git/app/backend/catalog.py:157).
+  [catalog](~/pinokio/api/voicestudio-mac.git/app/backend/catalog.py:157).
 - All Voice models below use the Apple-Silicon MLX path. TTS and transcription
   share one generation lock in the adopted worker, so no overlapping MLX memory
   spike is permitted. [transcription.py](../components/voice/app/backend/transcription.py)
@@ -38,7 +38,7 @@ means present in source but not accepted here for the requested release.
 | VoxCPM2 full | `mlx-community/VoxCPM2-bf16`; **revision pending archive/Hub catalog pin step** | Same modes, 5.0 GB download. Catalog calls it the reference-quality tier and estimates ~0.5× realtime; 16 GB is a known-not-below floor, not a measured safe budget. | Candidate only; needs a 24 GB qualification before exposing as “full.” |
 | OmniVoice full | `mlx-community/OmniVoice-bfloat16` @ `6119f7072580cc30c3cbdf496269216b03ad9742` | **Passed historical audit:** TTS with either voice design, optional 3–10 s clone reference, or both; 24 kHz. 8 GB floor / 16 GB recommended; 3.5 GB measured peak. 8 GB is only suitable for a dedicated worker because warning pressure leaves under 1 GB free. | Evidence-backed candidate, but still needs standalone runtime qualification; request is full/bf16 only. |
 
-FLUX evidence: [exact audit](/build/pinokio/api/imagestudio-mac/model-audits/2026-08-02-group-a/aitrader--flux2-klein-4b-mlx-4bit.audit.json). Qwen 0.6B evidence: [production audit](/build/pinokio/api/voicestudio-mac.git/model-audits/2026-09-10-qwen3-tts-0.6b-production-v1/mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit.audit.json). Qwen 1.7B evidence: [production-v2 audit](/build/pinokio/api/voicestudio-mac.git/model-audits/2026-08-15-qwen3-17b-production-v2/mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json). Vox catalog/evidence: [catalog](/build/pinokio/api/voicestudio-mac.git/app/backend/catalog.py:679). Omni evidence: [audit](/build/pinokio/api/voicestudio-mac.git/model-audits/2026-08-08-omnivoice/mlx-community--OmniVoice-bfloat16.audit.json).
+FLUX evidence: [exact audit](~/pinokio/api/imagestudio-mac/model-audits/2026-08-02-group-a/aitrader--flux2-klein-4b-mlx-4bit.audit.json). Qwen 0.6B evidence: [production audit](~/pinokio/api/voicestudio-mac.git/model-audits/2026-09-10-qwen3-tts-0.6b-production-v1/mlx-community--Qwen3-TTS-12Hz-0.6B-Base-8bit.audit.json). Qwen 1.7B evidence: [production-v2 audit](~/pinokio/api/voicestudio-mac.git/model-audits/2026-08-15-qwen3-17b-production-v2/mlx-community--Qwen3-TTS-12Hz-1.7B-Base-8bit.audit.json). Vox catalog/evidence: [catalog](~/pinokio/api/voicestudio-mac.git/app/backend/catalog.py:679). Omni evidence: [audit](~/pinokio/api/voicestudio-mac.git/model-audits/2026-08-08-omnivoice/mlx-community--OmniVoice-bfloat16.audit.json).
 
 ## Subtitle Studio: three existing Whisper choices
 
@@ -58,7 +58,7 @@ adapter deliberately attaches a tokenizer from the matching OpenAI base repo;
 each new Whisper import must include and pin that small companion snapshot.
 Sources: [registry and sizes](../components/voice/app/backend/transcription.py),
 [processor map and rationale](../components/voice/app/backend/transcription.py),
-[Turbo audit](/build/pinokio/api/voicestudio-mac.git/model-audits/2026-08-17-whisper-decode-conditioning/mlx-community--whisper-large-v3-turbo.audit.json), and
+[Turbo audit](~/pinokio/api/voicestudio-mac.git/model-audits/2026-08-17-whisper-decode-conditioning/mlx-community--whisper-large-v3-turbo.audit.json), and
 [standalone transcript receipt](../qualification/transcription.json).
 
 ## Adopted-runtime gaps that block a truthful release claim

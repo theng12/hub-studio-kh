@@ -1,7 +1,7 @@
 # R05 local slice — explicit SDK and routine lifecycle gate
 
 Base `b5506178cd0543a4734911c4fdb3c91d21ad271b`; worktree
-`/build/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
+`~/.codex/worktrees/handoff-completion/studio-hub-kh`, branch
 `codex/local-readiness-gatewaykh`. This is only the native-build portion of R05;
 do not mark the whole R05 portable/bootstrap task complete.
 

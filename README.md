@@ -243,4 +243,4 @@ The historical 0.2.0 evidence recorded 676 passing regression tests after reloca
 - [Local LLMs for 24/32 GB Apple Silicon (deep dive)](research/local-llm-24-32gb-2026-09.md)
 - [MoE fit companion for 24/32 GB](research/moe-24-32gb-fit-2026-09.md)
 
-The adopted Voice source remains under `components/voice`; sibling Pinokio repositories are source evidence only. Use planning-with-files with `PWF_PLAN_ROOT=/build/Projects/studiohub-standalone` and `PLAN_ID=2026-09-10-standalone-app-feasibility` when continuing the project.
+The adopted Voice source remains under `components/voice`; sibling Pinokio repositories are source evidence only. Use planning-with-files with `PWF_PLAN_ROOT=~/Projects/studiohub-standalone` and `PLAN_ID=2026-09-10-standalone-app-feasibility` when continuing the project.

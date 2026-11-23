@@ -1,6 +1,6 @@
 """An empty or unplayable voice file is a failed generation, never a published "done" (0.6.164).
 
-2026-10-09 08:04, Hub batch ebcfd92c1a on studio-mac-1504: a Breeze TTS job delivered a 0-byte m4a.
+2026-10-09 08:04, Hub batch ebcfd92c1a on mac-1504: a Breeze TTS job delivered a 0-byte m4a.
 The Hub set `artifact_metadata_error` but published the item `done` ("never retry a completed
 generation") and served the empty file with no size or checksum. Now:
 

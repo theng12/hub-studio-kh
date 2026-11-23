@@ -15,7 +15,7 @@ import pytest
 from test_discard_route_fleet import packaged_app  # noqa: F401  (the shared packaged-Hub fixture)
 
 FISH = "fish-audio-s2-pro-4bit"
-NODE = "studio-mac-1201-hub"
+NODE = "mac-1201-hub"
 ADDRESS = "http://100.96.171.120:47873"
 GIB = 1024 ** 3
 

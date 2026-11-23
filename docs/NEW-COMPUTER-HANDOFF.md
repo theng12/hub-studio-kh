@@ -73,7 +73,7 @@ It started and returned authenticated health 200/true during takeover, but it ha
 not been replaced. Do not use its version number alone to decide whether a fix is present.
 
 [MEASURED] A separate repair proof exists on the old computer at
-`/build/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/dist/Studio Hub.app`.
+`~/.codex/worktrees/studiohub-takeover-repair/studiohub-standalone/dist/Studio Hub.app`.
 It records 0.6.38, base `415df68`, and `development_build: true`. Changed module hashes
 were checked against repaired source. It is an explicitly identified local proof,
 not a clean release artifact. Its adjacent tree hash is recorded in

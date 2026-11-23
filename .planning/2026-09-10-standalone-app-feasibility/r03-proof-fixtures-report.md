@@ -1,7 +1,7 @@
 # R03 Voice proof-fixture alignment
 
 Base: `fb36c89dddf3592209c51e86e2699f07a6b30fd5`  
-Worktree: `/build/.codex/worktrees/handoff-completion/studio-hub-kh`  
+Worktree: `~/.codex/worktrees/handoff-completion/studio-hub-kh`  
 Scope: `tests/_hub_dispatch_proof.py`, embedded `_PROOF` in `tests/test_hub_jobs.py`.
 
 ## Finding and repair

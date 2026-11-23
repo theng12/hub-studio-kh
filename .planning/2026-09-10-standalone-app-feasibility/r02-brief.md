@@ -1,7 +1,7 @@
 # R02 — Reference boundary repair brief
 
 Base: `0ec3b3b09c9642b670ec0a092f4223ea4ffe0e24` (plan-only child of `1267a51`).
-Work only in `/build/.codex/worktrees/handoff-completion/studio-hub-kh`.
+Work only in `~/.codex/worktrees/handoff-completion/studio-hub-kh`.
 Read AGENTS and canonical task_plan.md Global constraints, Review focus and R02.
 
 GOAL: reproduce and fix C-01/C-02 at the shared execution-asset boundary.

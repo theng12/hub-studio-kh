@@ -1,5 +1,5 @@
-/build/Projects/studiohub-standalone/.build/downloads/cpython-3.12.14+20260901-aarch64-apple-darwin-install_only.tar.gz: OK
-/build/Projects/studiohub-standalone/.worktrees/st-03/packaging/image-runtime/requirements.lock.txt: OK
+~/Projects/studiohub-standalone/.build/downloads/cpython-3.12.14+20260901-aarch64-apple-darwin-install_only.tar.gz: OK
+~/Projects/studiohub-standalone/.worktrees/st-03/packaging/image-runtime/requirements.lock.txt: OK
 Using Python 3.12.14 environment at: .build/image-runtime-stage.mYhO0f
 Resolved 75 packages in 21ms
 Installed 75 packages in 1.26s
@@ -832,10 +832,10 @@ Installed 75 packages in 1.26s
     "install_id": "@rpath/libomp.dylib"
   }
 ]
-/build/Projects/studiohub-standalone/.worktrees/st-03/.build/image-runtime-stage.mYhO0f/manifest/macho-audit.json
-/build/Projects/studiohub-standalone/.worktrees/st-03/.build/image-runtime-stage.mYhO0f/manifest/runtime-files.json
-{"executable": "/build/Projects/studiohub-standalone/.worktrees/st-03/.build/Relocation Check 4033/Image Runtime/bin/python3", "machine": "arm64", "packages": {"Pillow": "12.3.0", "fastapi": "0.141.1", "mflux": "0.17.5", "mlx": "0.31.2", "mlx-metal": "0.31.2", "numpy": "2.5.3", "safetensors": "0.8.0", "transformers": "5.17.0", "uvicorn": "0.52.4"}, "python": "3.12.14"}
-/build/Projects/studiohub-standalone/.worktrees/st-03/.build/Relocation Check 4033/Image Runtime/manifest/runtime-files.json
-{"executable": "/build/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker/bin/python3", "machine": "arm64", "packages": {"Pillow": "12.3.0", "fastapi": "0.141.1", "mflux": "0.17.5", "mlx": "0.31.2", "mlx-metal": "0.31.2", "numpy": "2.5.3", "safetensors": "0.8.0", "transformers": "5.17.0", "uvicorn": "0.52.4"}, "python": "3.12.14"}
-/build/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker/manifest/runtime-files.json
-Image runtime ready: /build/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker
+~/Projects/studiohub-standalone/.worktrees/st-03/.build/image-runtime-stage.mYhO0f/manifest/macho-audit.json
+~/Projects/studiohub-standalone/.worktrees/st-03/.build/image-runtime-stage.mYhO0f/manifest/runtime-files.json
+{"executable": "~/Projects/studiohub-standalone/.worktrees/st-03/.build/Relocation Check 4033/Image Runtime/bin/python3", "machine": "arm64", "packages": {"Pillow": "12.3.0", "fastapi": "0.141.1", "mflux": "0.17.5", "mlx": "0.31.2", "mlx-metal": "0.31.2", "numpy": "2.5.3", "safetensors": "0.8.0", "transformers": "5.17.0", "uvicorn": "0.52.4"}, "python": "3.12.14"}
+~/Projects/studiohub-standalone/.worktrees/st-03/.build/Relocation Check 4033/Image Runtime/manifest/runtime-files.json
+{"executable": "~/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker/bin/python3", "machine": "arm64", "packages": {"Pillow": "12.3.0", "fastapi": "0.141.1", "mflux": "0.17.5", "mlx": "0.31.2", "mlx-metal": "0.31.2", "numpy": "2.5.3", "safetensors": "0.8.0", "transformers": "5.17.0", "uvicorn": "0.52.4"}, "python": "3.12.14"}
+~/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker/manifest/runtime-files.json
+Image runtime ready: ~/Projects/studiohub-standalone/.worktrees/st-03/.build/st03-image-runtime-worker

@@ -1,6 +1,6 @@
 """A renamed Mac shows its new name on its controller and the Gateway, without leaving and re-joining.
 
-Live 2026-10-02 (Hub 0.6.132): studio-mac-0108-m1-8-256 was renamed studio-mac-1409-m1-8-256. Its own
+Live 2026-10-02 (Hub 0.6.132): mac-0108-m1-8-256 was renamed mac-1409-m1-8-256. Its own
 Connections page said so; its controller's roster, and so the Gateway's Fleet page, kept the old name.
 The roster name was written at join and changed only by the node's minute status call - and only when
 that call carried the node's own credential, which a Mac whose credential the controller no longer
@@ -33,11 +33,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from components.hub.backend import auth, fleet_nodes  # noqa: E402
 
-NODE = "studio-mac-0108-m1-8-256-hub"
+NODE = "mac-0108-m1-8-256-hub"
 STUDIOS = [{"id": "voice", "modality": "voice"}]
 
 
-def snapshot(name: object = "studio-mac-1409-m1-8-256", node: str = NODE, *, reachable: bool = True,
+def snapshot(name: object = "mac-1409-m1-8-256", node: str = NODE, *, reachable: bool = True,
              auth_ok: bool = True) -> dict:
     """What the peer poll stores from `/api/hub/resources?local_only=true`."""
     return {"reachable": reachable, "auth": auth_ok, "status": "connected",
@@ -52,7 +52,7 @@ class _Roster(unittest.TestCase):
         patcher = mock.patch.object(fleet_nodes, "DATA_DIR", Path(self.tmp.name))
         patcher.start()
         self.addCleanup(patcher.stop)
-        fleet_nodes.join({"node_id": NODE, "name": "studio-mac-0108-m1-8-256",
+        fleet_nodes.join({"node_id": NODE, "name": "mac-0108-m1-8-256",
                           "address": "http://100.64.0.8:47873", "studios": STUDIOS})
 
     def name(self) -> str:
@@ -64,21 +64,21 @@ class RosterNameFollowsTheNode(_Roster):
         with mock.patch.object(fleet_nodes, "fresh_snapshot", return_value=snapshot()):
             self.assertTrue(fleet_nodes.sync_roster_from_snapshots())
             self.assertFalse(fleet_nodes.sync_roster_from_snapshots(), "a second pass changes nothing")
-        self.assertEqual(self.name(), "studio-mac-1409-m1-8-256")
+        self.assertEqual(self.name(), "mac-1409-m1-8-256")
         # The id is the identity and does not move; what the Gateway reads as the roster name does.
         self.assertIn(NODE, fleet_nodes._read())
         self.assertEqual(fleet_nodes._member(fleet_nodes._read()[NODE], role="agent")["label"],
-                         "studio-mac-1409-m1-8-256")
+                         "mac-1409-m1-8-256")
 
     def test_silence_and_strangers_never_rename_a_row(self) -> None:
         for said in (None, snapshot(reachable=False), snapshot(auth_ok=False),
                      {"reachable": True, "auth": True, "studios": {}},          # an older Hub
                      snapshot(node="some-other-mac-hub"),                         # another Mac's answer
                      snapshot(""), snapshot("   "), snapshot("x" * 121), snapshot("bad\nname"),
-                     {**snapshot(), "machine": "studio-mac-1409"}):
+                     {**snapshot(), "machine": "mac-1409"}):
             with mock.patch.object(fleet_nodes, "fresh_snapshot", return_value=said):
                 fleet_nodes.sync_roster_from_snapshots()
-            self.assertEqual(self.name(), "studio-mac-0108-m1-8-256", said)
+            self.assertEqual(self.name(), "mac-0108-m1-8-256", said)
 
     def test_the_node_credential_rename_path_still_works(self) -> None:
         self.assertTrue(fleet_nodes.rename(NODE, "  renamed by its own call  "))
@@ -110,7 +110,7 @@ class RenameFromTheGateway(_Roster):
     def test_the_mac_is_renamed_first_then_its_row(self) -> None:
         from components.hub.backend import peers
         client = _Client(httpx.Response(200, json={"settings": {}}))
-        peers._cache[NODE] = (time.time(), snapshot("studio-mac-0108-m1-8-256"))
+        peers._cache[NODE] = (time.time(), snapshot("mac-0108-m1-8-256"))
         self.addCleanup(peers._cache.pop, NODE, None)
         answer = self.relay(client, "  Studio Mac 14 ")
         self.assertIsNone(peers.fresh_snapshot(NODE), "the pre-rename snapshot must not rename it back")
@@ -131,7 +131,7 @@ class RenameFromTheGateway(_Roster):
                 self.relay(_Client(answer))
             self.assertEqual(error.exception.status, 502)
             self.assertEqual(error.exception.body["code"], code)
-            self.assertEqual(self.name(), "studio-mac-0108-m1-8-256")
+            self.assertEqual(self.name(), "mac-0108-m1-8-256")
 
     def test_a_bad_name_or_unknown_mac_is_refused_before_anything_is_sent(self) -> None:
         client = _Client(httpx.Response(200, json={}))
@@ -206,9 +206,9 @@ class Routes(unittest.TestCase):
     def test_resources_tell_the_controller_what_this_mac_is_called(self) -> None:
         with ExitStack() as stack:
             client = self.client(stack)
-            client.post("/api/hub/machine-label", json={"name": "studio-mac-1409-m1-8-256"}, headers=self.OWNER)
+            client.post("/api/hub/machine-label", json={"name": "mac-1409-m1-8-256"}, headers=self.OWNER)
             machine = client.get("/api/hub/resources", headers=self.FLEET).json()["machine"]
-            self.assertEqual(machine["name"], "studio-mac-1409-m1-8-256")
+            self.assertEqual(machine["name"], "mac-1409-m1-8-256")
             from components.hub.backend import control_plane
             self.assertEqual(machine["id"], control_plane.public_settings()["controller_id"])
 

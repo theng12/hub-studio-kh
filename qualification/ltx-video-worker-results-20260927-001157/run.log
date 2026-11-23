@@ -1,13 +1,13 @@
 accepted 71865db1877c4e7dbd8918c9e8c9ff64 (running)
   running preparing 2%
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] ...
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
 [Loading text encoder (Gemma)] done in 4.4s
 [Encoding prompt] ...
 [Encoding prompt] done in 15.0s
 [Loading transformer (transformer-distilled.safetensors)] ...
-warning: no transformer config (embedded_config.json / config.json) found in /build/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
+warning: no transformer config (embedded_config.json / config.json) found in ~/StudioHubModels/ltx-2-3-22b-ram-12gb-mlx/d8a9d2f6081c4136130983a0b612962418ddf203/model; using hardcoded defaults (av_ca_timestep_scale_multiplier=1). Audio cross-modal gating may be wrong — see issue #37.
   Mixed-precision quantization: 1415 layers — {2: 29, 3: 225, 4: 348, 5: 631, 6: 125, 8: 57}
 [Loading transformer (transformer-distilled.safetensors)] done in 3.6s
 two-stage half-res snaps dims to multiples of 64; output will be 512x256 (requested 512x288). Use --single-stage for exact dims.
@@ -32,6 +32,6 @@ two-stage half-res snaps dims to multiples of 64; output will be 512x256 (reques
   "wall_seconds": 103.67045497894287,
   "peak_footprint_bytes": 15386290304,
   "peak_mlx_bytes": 9977828986,
-  "artifact": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260927-001157/generated.mp4",
-  "results": "/build/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260927-001157"
+  "artifact": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260927-001157/generated.mp4",
+  "results": "~/Developer/studio-hub-kh/qualification/ltx-video-worker-results-20260927-001157"
 }

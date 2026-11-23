@@ -82,7 +82,7 @@ The Hub's port is fixed at **47873** so a node can name this Mac again after a r
 ## Joining a Mac to a controller
 
 On the **joining** Mac's own app: **Connections → Join a controller**, then enter the
-controller's address (`100.x.y.z`, or a name like `mac.tailnet.ts.net` - the port is optional) and the **controller's Fleet token**. The
+controller's address (`100.x.y.z`, or a name like `mac.local` - the port is optional) and the **controller's Fleet token**. The
 controller's Fleet overview will then show whether this Mac is reachable.
 
 ## Seeing your pool

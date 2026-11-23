@@ -1,5 +1,5 @@
-app:     /build/Applications/Studio Hub.app
-library: /build/StudioHubModels
+app:     ~/Applications/Studio Hub.app
+library: ~/StudioHubModels
 
 identity: 0.6.38 415df68d35c628cf77893fa6550f75b160f4221b development_build: False
 quarantined files: 0

@@ -4,7 +4,7 @@ Read-only inspection of standalone baseline `29d0baa7e06117451c31a71860a08680cc0
 
 ## Baseline and preservation
 
-- Repository: `/build/Projects/studiohub-standalone`, branch `implementation/voice-runtime`, HEAD `29d0baa`.
+- Repository: `~/Projects/studiohub-standalone`, branch `implementation/voice-runtime`, HEAD `29d0baa`.
 - Pre-existing worktree changes were preserved: planning `findings.md`/`progress.md`, the Graphify query stamp, and untracked SSD/Yume research plus the existing model inventory.
 - The standalone AGENTS file requires external mutable state and model storage, immutable bundled code, local verification only, no hosted compute/deployment, and honest separation of compatibility targets from qualification. The accepted plan is `docs/standalone-plan.md`; no parallel plan is created.
 - Existing Graphify data is under `research/voice-source-graph/graphify-out` and covers Voice only. Its query confirms the relevant storage, model loading, FFmpeg, memory and worker lifecycle symbols; absence was checked against current source rather than inferred from the graph.
