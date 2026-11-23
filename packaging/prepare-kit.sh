@@ -2,6 +2,9 @@
 # Prepare one SSD volume's kit to the current standard.
 #
 #   bash .build/prepare-kit.sh KH-STUDIO-XXXX
+#   KIT_RETIRE_ITEMS=$'old kit folder\nold kit file.md' bash .build/prepare-kit.sh KH-STUDIO-XXXX
+#     (KIT_RETIRE_ITEMS is required: the old kit's own file names are drive data, not the script's;
+#      unset refuses, and set-but-empty means there is nothing to retire)
 #
 # Nothing is deleted: anything displaced goes to a `_trash` folder on that volume,
 # which the owner empties by hand.
@@ -189,12 +192,17 @@ path.write_text(text)
 print(f"   index document stamped {version} · {commit}")
 STAMP
 
-echo "### $VOLUME: retire the Pinokio kit into _trash (nothing deleted)"
+echo "### $VOLUME: retire the old kit files into _trash (nothing deleted)"
+# Those file names are the drives' own data, not this script's to carry. Set KIT_RETIRE_ITEMS to a
+# newline-separated list (an item may contain spaces; leaving it set but empty is the honest way to
+# say there is nothing to retire). Unset refuses rather than guessing which files are the old kit's.
+if [ "${KIT_RETIRE_ITEMS+set}" != set ]; then
+  echo "   NOT run: KIT_RETIRE_ITEMS is unset - set it to the newline-separated item names" >&2
+  exit 1
+fi
 mkdir -p "/Volumes/$VOLUME/_trash"
-for item in studio-mac-bootstrap studio-models \
-            "START HERE - TerraNash Mac Setup.md" "Setup Fleet Tokens.md" \
-            "Setup for Fleet.rtf" AGENTS.md "READ-ME-FIRST.md" \
-            .studio-mac-fleet-ssd.json; do
+printf '%s\n' "$KIT_RETIRE_ITEMS" | while IFS= read -r item; do
+  [ -n "$item" ] || continue
   if [ -e "/Volumes/$VOLUME/$item" ] && [ ! -e "/Volumes/$VOLUME/_trash/$item" ]; then
     mv "/Volumes/$VOLUME/$item" "/Volumes/$VOLUME/_trash/" && echo "   _trash: $item"
   fi
