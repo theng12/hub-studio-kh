@@ -2,6 +2,15 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.258 — 2026-11-23
+
+- **Hub carries nothing of yours when it leaves this Mac.** The project's own files no longer name a person's home folder or a machine on your network, so the project can be published without exposing either. Nothing you use changes: every path still resolves on your Mac, and the drive kit behaves exactly as before.
+- **The drive kit's old-file cleanup takes its list from you.** Preparing a drive now asks for the names of the retired kit's files (`KIT_RETIRE_ITEMS`). If that list is not given, the step refuses and says so instead of guessing which files on the drive were the old kit's; an empty list means there is nothing to retire.
+
+### Technical notes
+- Tracked tree scanned clean for `/Users/<name>`, `.ts.net` hosts and the estate hostname prefix (172 files): paths now come from `Path.home()`/`$HOME`/the environment at runtime, documents and evidence were reworded, six evidence PNGs dropped a path-bearing EXIF block (pixels untouched), and fixtures were renamed consistently. Configs that named the old checkout resolve to the current one. No behaviour changes; every developer-schema path still skips when absent.
+- `packaging/prepare-kit.sh` takes `KIT_RETIRE_ITEMS` (newline-separated, spaces allowed): unset refuses with exit 1, set-but-empty means nothing to retire, and each named item still moves into that volume's `_trash` under the same name.
+
 ## 0.6.257 — 2026-11-21
 
 - **A new local text model: Qwen 3.8 27B.** A capable 27-billion-parameter model that keeps a long conversation usable, offered on the Macs that can hold it. Macs with 24 GB or more can pick it; a 16 GB Mac shows it greyed with the reason — "Needs a Mac with at least 24 GB of memory; this one has 16 GB" — rather than hiding it, because a model you cannot see is harder to plan around than one you can. It downloads 15 GB, so the download checks for room first and resumes rather than starting over.
