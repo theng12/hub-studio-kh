@@ -10,6 +10,7 @@ Plain-language changes appear first in each release and feed the app’s What’
 ### Technical notes
 - Tracked tree scanned clean for `/Users/<name>`, `.ts.net` hosts and the estate hostname prefix (172 files): paths now come from `Path.home()`/`$HOME`/the environment at runtime, documents and evidence were reworded, six evidence PNGs dropped a path-bearing EXIF block (pixels untouched), and fixtures were renamed consistently. Configs that named the old checkout resolve to the current one. No behaviour changes; every developer-schema path still skips when absent.
 - `packaging/prepare-kit.sh` takes `KIT_RETIRE_ITEMS` (newline-separated, spaces allowed): unset refuses with exit 1, set-but-empty means nothing to retire, and each named item still moves into that volume's `_trash` under the same name.
+- `packaging/yue2-runtime/build.sh` drops two build-machine files the runtime checker refuses — the uv CPython distribution's `BUILD` stamp at the runtime root and the local install's `uv_cache.json` in its dist-info. No runtime content changes.
 
 ## 0.6.257 — 2026-11-21
 
