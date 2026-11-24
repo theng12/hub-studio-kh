@@ -6705,6 +6705,19 @@ struct StudioContent: View {
                     in: RoundedRectangle(cornerRadius: HubRadius.card, style: .continuous))
     }
 
+    /// What a download's chip says. A waiting copy names its place in the line, a paused one says it is
+    /// paused, and only a run that is actually copying shows a percentage (owner, 2026-11-24).
+    static func downloadBadge(_ download: NativeDownload) -> String {
+        switch download.state {
+        case "queued":
+            return download.position.map { "Waiting in line · position \($0)" } ?? "Waiting in line"
+        case "paused":
+            return "Paused"
+        default:
+            return "Downloading \(Int(min(100, max(0, download.percent))))%"
+        }
+    }
+
     private func downloadRow(_ download: NativeDownload) -> some View {
         // The same row shape as a job: text and progress in the content slot, one action in the
         // fixed actions column, so a Cancel lines up with the job Cancels above it.
@@ -6716,13 +6729,11 @@ struct StudioContent: View {
                     // its place in the line or the drive it needs, and never a percentage it does
                     // not have (owner, 2026-11-24: the queue is where a second request waits).
                     if download.state == "queued" {
-                        StatusBadge(text: download.position.map { "Waiting in line · position \($0)" }
-                                        ?? "Waiting in line",
-                                    status: .info, symbol: "clock")
+                        StatusBadge(text: Self.downloadBadge(download), status: .info, symbol: "clock")
                     } else if download.state == "paused" {
-                        StatusBadge(text: "Paused", status: .info, symbol: "pause.circle")
+                        StatusBadge(text: Self.downloadBadge(download), status: .info, symbol: "pause.circle")
                     } else if active(download.state) {
-                        StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                        StatusBadge(text: Self.downloadBadge(download),
                                     status: .info, symbol: "arrow.down.circle")
                     } else {
                         StatusBadge(text: stateLabel(download.state),

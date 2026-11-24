@@ -112,24 +112,20 @@ enum ViewChecks {
         check(all != nil && downloads != nil, "the Jobs page draws offscreen")
         check(all != downloads, "choosing the Downloads tab changes the page")
 
-        // A waiting copy draws its place in the line, never a percentage it does not have
-        // (owner, 2026-11-24: a second request waits in a queue instead of failing).
-        func download(_ id: String, _ state: String, percent: Double, position: Int?) -> NativeDownload {
-            NativeDownload(id: id, repo: "vanch007/mlx-Yue2-3B", state: state, percent: percent,
+        // A waiting copy names its place in the line, never a percentage it does not have, and a paused
+        // one does not read as downloading (owner, 2026-11-24: a second request waits in a queue).
+        func download(_ state: String, percent: Double, position: Int?) -> NativeDownload {
+            NativeDownload(id: state, repo: "vanch007/mlx-Yue2-3B", state: state, percent: percent,
                            downloadedBytes: Int64(percent) * 10_000_000, totalBytes: 7_200_000_000,
                            error: nil, source: "lan", finishedAt: nil, position: position, pausedReason: nil)
         }
-        studio.workspace.downloads = [download("run", "running", percent: 42, position: nil)]
-        let runningRow = draw()
-        studio.workspace.downloads = [download("waiting", "queued", percent: 0, position: 1)]
-        let queuedRow = draw()
-        studio.workspace.downloads = [download("paused", "paused", percent: 8, position: nil)]
-        let pausedRow = draw()
-        studio.workspace.downloads = []
-        settle()
-        check(runningRow != nil && runningRow != queuedRow,
-              "a waiting download draws its own state, not a percentage")
-        check(runningRow != pausedRow, "a paused download draws its own state")
+        let waiting = StudioContent.downloadBadge(download("queued", percent: 0, position: 1))
+        check(waiting == "Waiting in line · position 1",
+              "a waiting download names its place, not a percentage: \(waiting)")
+        let paused = StudioContent.downloadBadge(download("paused", percent: 8, position: nil))
+        check(paused == "Paused", "a paused download does not read as downloading: \(paused)")
+        let copying = StudioContent.downloadBadge(download("running", percent: 42, position: nil))
+        check(copying == "Downloading 42%", "a copying run still shows its percentage: \(copying)")
 
         // ---- Jobs Tab Geometry Invariance, Multi-bar Independence & Reachability (2026-11-02) ----
         if let control, control.segmentCount == HistoryTab.allCases.count {
