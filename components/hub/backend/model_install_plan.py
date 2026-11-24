@@ -297,8 +297,20 @@ def _gb(value: int | float | None) -> str:
     return f"{float(value) / 1e9:.1f} GB"
 
 
+def _queued_packages() -> set[str]:
+    """Packages waiting in the import queue. Read lazily: the queue module imports the store, and
+    this module is imported by it at start-up."""
+    try:
+        from .. import model_downloads
+        return {run.get("package_id") for run in model_downloads.list_runs()
+                if run.get("state") == "queued"}
+    except Exception:  # noqa: BLE001 - a snapshot must not fail because the queue cannot be read
+        return set()
+
+
 def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[str, dict],
-                memory_gb: float | None, disk_state: dict, stop_bytes: int) -> list[dict]:
+                memory_gb: float | None, disk_state: dict, stop_bytes: int,
+                queued_packages: set[str] | None = None) -> list[dict]:
     """Every preset with its own package list, totals and completion count.
 
     **Complete means installed and verified, every one of them.** The count is built from the
@@ -320,6 +332,9 @@ def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[s
             "own_packages": list(preset["packages"]),
             "installed_count": len(installed),
             "package_count": len(listed),
+            # Waiting in the import queue: what the card says beside the count (owner 2026-11-24).
+            "queued_count": len([package_id for package_id in listed
+                                 if package_id in (queued_packages or set())]),
             # A preset is complete only when every package is installed and verified.
             "complete": len(listed) > 0 and len(installed) == len(listed),
             "fits_this_mac": memory_gb is not None and float(memory_gb) >= preset["memory_tier_gb"],
@@ -349,7 +364,7 @@ def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
                       ssd_source=kit_drives.ssd_sources(drives))
     by_id = {row["package_id"]: row for row in rows}
     presets = preset_rows(presets=shipped, rows=by_id, manifests=manifests,
-                          memory_gb=memory_gb, disk_state=disk_state, stop_bytes=stop_bytes)
+                          memory_gb=memory_gb, disk_state=disk_state, stop_bytes=stop_bytes, queued_packages=_queued_packages())
     chosen = model_presets.starting_id(memory_gb)
     groups = []
     for job in JOB_ORDER:

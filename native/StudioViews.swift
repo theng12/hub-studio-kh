@@ -5574,7 +5574,9 @@ struct StudioContent: View {
                     if preset.complete {
                         StatusBadge(text: "Installed", status: .ok, symbol: "checkmark.circle.fill")
                     } else if preset.installedCount > 0 {
-                        StatusBadge(text: "\(preset.installedCount) of \(preset.packageCount)",
+                        StatusBadge(text: preset.queuedCount > 0
+                                        ? "\(preset.installedCount) of \(preset.packageCount) · \(preset.queuedCount) queued"
+                                        : "\(preset.installedCount) of \(preset.packageCount)",
                                     status: .warn, symbol: "circle.dashed")
                     }
                     if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
@@ -5608,7 +5610,9 @@ struct StudioContent: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed")
+        .accessibilityLabel(preset.queuedCount > 0
+                            ? "\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed, \(preset.queuedCount) queued"
+                            : "\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed")
         .contextMenu {
             Button(preset.complete ? "Re-check Files" : "Install \(preset.name)") {
                 Task { await workspace.installPreset(preset) }
@@ -9786,7 +9790,13 @@ private struct SetupDownloadsSheet: View {
                         Text(source).font(HubType.caption).foregroundStyle(.secondary)
                     }
                 }
-                if Self.active(download.state) {
+                if download.state == "queued" {
+                    Text(download.position.map { "Waiting in line · position \($0)" } ?? "Waiting in line")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                } else if download.state == "paused" {
+                    Text(download.pausedReason ?? "Paused — the drive is not connected")
+                        .font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else if Self.active(download.state) {
                     if download.totalBytes > 0 {
                         ProgressView(value: min(100, max(0, download.percent)), total: 100)
                         Text("\(Int(min(100, max(0, download.percent))))% · \(Self.gigabytes(download.downloadedBytes)) of \(Self.gigabytes(download.totalBytes))")
@@ -9801,6 +9811,9 @@ private struct SetupDownloadsSheet: View {
                 }
             }
             Spacer(minLength: HubSpace.m)
+            if download.state == "paused" {
+                Button("Resume") { Task { await workspace.resumeDownload(download) } }.hubRowControl()
+            }
             if Self.active(download.state) {
                 Button("Cancel") { Task { await workspace.cancelDownload(download) } }.hubRowControl()
             }
