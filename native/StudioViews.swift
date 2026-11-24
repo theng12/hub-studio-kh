@@ -6712,7 +6712,16 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.tight) {
                 HStack(spacing: HubSpace.s) {
                     Text(modelName(download.repo)).lineLimit(1)
-                    if active(download.state) {
+                    // A waiting or paused copy is not downloading: it says what it is doing, with
+                    // its place in the line or the drive it needs, and never a percentage it does
+                    // not have (owner, 2026-11-24: the queue is where a second request waits).
+                    if download.state == "queued" {
+                        StatusBadge(text: download.position.map { "Waiting in line · position \($0)" }
+                                        ?? "Waiting in line",
+                                    status: .info, symbol: "clock")
+                    } else if download.state == "paused" {
+                        StatusBadge(text: "Paused", status: .info, symbol: "pause.circle")
+                    } else if active(download.state) {
                         StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
                                     status: .info, symbol: "arrow.down.circle")
                     } else {
@@ -6720,7 +6729,11 @@ struct StudioContent: View {
                                     status: download.error != nil ? .bad : .ok)
                     }
                 }
-                if active(download.state) {
+                if download.state == "paused" {
+                    Text(download.pausedReason ?? "Paused — the drive is not connected")
+                        .font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if active(download.state), download.state != "queued", download.state != "paused" {
                     if download.percent > 0 || download.totalBytes > 0 {
                         ProgressView(value: min(100, max(0, download.percent)), total: 100)
                         if download.totalBytes > 0 {
@@ -6741,6 +6754,10 @@ struct StudioContent: View {
                 }
             }
             RowActions {
+                if download.state == "paused" {
+                    Button("Resume") { Task { await workspace.resumeDownload(download) } }
+                        .disabled(!connected).rowAction()
+                }
                 if active(download.state) {
                     Button("Cancel") { Task { await workspace.cancelDownload(download) } }
                         .disabled(!connected).rowAction()
