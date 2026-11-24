@@ -685,12 +685,12 @@ struct PageRenderHarness {
         let presets = [
             NativePreset(id: "essentials-8", name: "Essentials · 8 GB", tierGB: 8,
                          summary: "What an 8 GB Mac needs to write, draw, narrate, transcribe, read pictures, search meaning and score.",
-                         installedCount: 9, packageCount: 9, complete: true, fitsThisMac: true,
+                         installedCount: 9, packageCount: 9, queuedCount: 0, complete: true, fitsThisMac: true,
                          toCopyBytes: 0, freeAfterBytes: 380_200_000_000, refused: nil,
                          packageIDs: ["whisper-turbo"]),
             NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
                          summary: "Adds the larger image model, the writing model, a better captioner, the second voice and the 16 GB voice tier.",
-                         installedCount: 6, packageCount: 8, complete: false, fitsThisMac: true,
+                         installedCount: 6, packageCount: 8, queuedCount: 0, complete: false, fitsThisMac: true,
                          toCopyBytes: 22_500_000_000, freeAfterBytes: 357_700_000_000, refused: nil,
                          packageIDs: ["z-image-turbo-mflux-4bit", "qwen-image-2-1-turbo-mflux-q4",
                                       "qwen-image-2-1-mlx-serve-4bit", "qwen3-tts-12hz-0-6b-base-4bit",
@@ -698,12 +698,12 @@ struct PageRenderHarness {
                                       "florence-2-large-ft", "whisper-turbo"]),
             NativePreset(id: "creator-plus-24", name: "Creator Plus · 24 GB", tierGB: 24,
                          summary: "Adds music generation and Gemma 3 12B for longer writing.",
-                         installedCount: 0, packageCount: 16, complete: false, fitsThisMac: true,
+                         installedCount: 0, packageCount: 16, queuedCount: 0, complete: false, fitsThisMac: true,
                          toCopyBytes: 64_200_000_000, freeAfterBytes: 316_000_000_000, refused: nil,
                          packageIDs: []),
             NativePreset(id: "studio-pro-32", name: "Studio Pro · 32 GB+", tierGB: 32,
                          summary: "Adds the largest writing models: Qwen3.6 35B and Gemma 4 26B.",
-                         installedCount: 0, packageCount: 18, complete: false, fitsThisMac: false,
+                         installedCount: 0, packageCount: 18, queuedCount: 0, complete: false, fitsThisMac: false,
                          toCopyBytes: 378_000_000_000, freeAfterBytes: 2_200_000_000,
                          refused: "Not enough free space on /Volumes/KH-STUDIO-ATLAS/model-target: copying 378.0 GB would leave 2.2 GB, and this Mac keeps 5.0 GB free for working room.",
                          packageIDs: [])
@@ -760,7 +760,7 @@ struct PageRenderHarness {
                 id: "fixture-ssd-failure", repo: "qwen-image-2-1-turbo-mflux-q4", state: "error",
                 percent: 12, downloadedBytes: 1_200_000_000, totalBytes: 10_000_000_000,
                 error: "sha256 mismatch on model.safetensors", source: "ssd:ATLAS",
-                finishedAt: Date().timeIntervalSince1970))
+                finishedAt: Date().timeIntervalSince1970, position: nil, pausedReason: nil))
         }
     }
 
@@ -964,11 +964,20 @@ struct PageRenderHarness {
         workspace.downloads = [
             NativeDownload(id: "fixture-download", repo: "vanch007/mlx-Yue2-3B", state: "running",
                            percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000,
-                           error: nil, source: "lan", finishedAt: nil),
+                           error: nil, source: "lan", finishedAt: nil, position: nil, pausedReason: nil),
+            // A second request waiting its turn, and one whose drive went away: the 0.6.259 queue
+            // shows both rows on the Set up sheet, so the release's own screens carry them.
+            NativeDownload(id: "fixture-queued", repo: "qwen36-35b-4bit", state: "queued",
+                           percent: 0, downloadedBytes: 0, totalBytes: 19_800_000_000,
+                           error: nil, source: "internet", finishedAt: nil, position: 1, pausedReason: nil),
+            NativeDownload(id: "fixture-paused", repo: "breeze-tts-2-mlx-4bit", state: "paused",
+                           percent: 8, downloadedBytes: 400_000_000, totalBytes: 4_900_000_000,
+                           error: nil, source: "ssd:ATLAS", finishedAt: nil, position: nil,
+                           pausedReason: "ATLAS is not connected"),
             NativeDownload(id: "fixture-finished", repo: "whisper-turbo", state: "done",
                            percent: 100, downloadedBytes: 1_600_000_000, totalBytes: 1_600_000_000,
                            error: nil, source: "internet",
-                           finishedAt: Date().timeIntervalSince1970 - 1800),
+                           finishedAt: Date().timeIntervalSince1970 - 1800, position: nil, pausedReason: nil),
         ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,

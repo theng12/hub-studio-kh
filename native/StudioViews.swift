@@ -5574,7 +5574,9 @@ struct StudioContent: View {
                     if preset.complete {
                         StatusBadge(text: "Installed", status: .ok, symbol: "checkmark.circle.fill")
                     } else if preset.installedCount > 0 {
-                        StatusBadge(text: "\(preset.installedCount) of \(preset.packageCount)",
+                        StatusBadge(text: preset.queuedCount > 0
+                                        ? "\(preset.installedCount) of \(preset.packageCount) · \(preset.queuedCount) queued"
+                                        : "\(preset.installedCount) of \(preset.packageCount)",
                                     status: .warn, symbol: "circle.dashed")
                     }
                     if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
@@ -5608,7 +5610,9 @@ struct StudioContent: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed")
+        .accessibilityLabel(preset.queuedCount > 0
+                            ? "\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed, \(preset.queuedCount) queued"
+                            : "\(preset.name), \(preset.installedCount) of \(preset.packageCount) installed")
         .contextMenu {
             Button(preset.complete ? "Re-check Files" : "Install \(preset.name)") {
                 Task { await workspace.installPreset(preset) }
@@ -6701,6 +6705,19 @@ struct StudioContent: View {
                     in: RoundedRectangle(cornerRadius: HubRadius.card, style: .continuous))
     }
 
+    /// What a download's chip says. A waiting copy names its place in the line, a paused one says it is
+    /// paused, and only a run that is actually copying shows a percentage (owner, 2026-11-24).
+    static func downloadBadge(_ download: NativeDownload) -> String {
+        switch download.state {
+        case "queued":
+            return download.position.map { "Waiting in line · position \($0)" } ?? "Waiting in line"
+        case "paused":
+            return "Paused"
+        default:
+            return "Downloading \(Int(min(100, max(0, download.percent))))%"
+        }
+    }
+
     private func downloadRow(_ download: NativeDownload) -> some View {
         // The same row shape as a job: text and progress in the content slot, one action in the
         // fixed actions column, so a Cancel lines up with the job Cancels above it.
@@ -6708,15 +6725,26 @@ struct StudioContent: View {
             VStack(alignment: .leading, spacing: HubSpace.tight) {
                 HStack(spacing: HubSpace.s) {
                     Text(modelName(download.repo)).lineLimit(1)
-                    if active(download.state) {
-                        StatusBadge(text: "Downloading \(Int(min(100, max(0, download.percent))))%",
+                    // A waiting or paused copy is not downloading: it says what it is doing, with
+                    // its place in the line or the drive it needs, and never a percentage it does
+                    // not have (owner, 2026-11-24: the queue is where a second request waits).
+                    if download.state == "queued" {
+                        StatusBadge(text: Self.downloadBadge(download), status: .info, symbol: "clock")
+                    } else if download.state == "paused" {
+                        StatusBadge(text: Self.downloadBadge(download), status: .info, symbol: "pause.circle")
+                    } else if active(download.state) {
+                        StatusBadge(text: Self.downloadBadge(download),
                                     status: .info, symbol: "arrow.down.circle")
                     } else {
                         StatusBadge(text: stateLabel(download.state),
                                     status: download.error != nil ? .bad : .ok)
                     }
                 }
-                if active(download.state) {
+                if download.state == "paused" {
+                    Text(download.pausedReason ?? "Paused — the drive is not connected")
+                        .font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if active(download.state), download.state != "queued", download.state != "paused" {
                     if download.percent > 0 || download.totalBytes > 0 {
                         ProgressView(value: min(100, max(0, download.percent)), total: 100)
                         if download.totalBytes > 0 {
@@ -6737,6 +6765,10 @@ struct StudioContent: View {
                 }
             }
             RowActions {
+                if download.state == "paused" {
+                    Button("Resume") { Task { await workspace.resumeDownload(download) } }
+                        .disabled(!connected).rowAction()
+                }
                 if active(download.state) {
                     Button("Cancel") { Task { await workspace.cancelDownload(download) } }
                         .disabled(!connected).rowAction()
@@ -9786,7 +9818,13 @@ private struct SetupDownloadsSheet: View {
                         Text(source).font(HubType.caption).foregroundStyle(.secondary)
                     }
                 }
-                if Self.active(download.state) {
+                if download.state == "queued" {
+                    Text(download.position.map { "Waiting in line · position \($0)" } ?? "Waiting in line")
+                        .font(HubType.caption).foregroundStyle(.secondary)
+                } else if download.state == "paused" {
+                    Text(download.pausedReason ?? "Paused — the drive is not connected")
+                        .font(HubType.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else if Self.active(download.state) {
                     if download.totalBytes > 0 {
                         ProgressView(value: min(100, max(0, download.percent)), total: 100)
                         Text("\(Int(min(100, max(0, download.percent))))% · \(Self.gigabytes(download.downloadedBytes)) of \(Self.gigabytes(download.totalBytes))")
@@ -9801,6 +9839,9 @@ private struct SetupDownloadsSheet: View {
                 }
             }
             Spacer(minLength: HubSpace.m)
+            if download.state == "paused" {
+                Button("Resume") { Task { await workspace.resumeDownload(download) } }.hubRowControl()
+            }
             if Self.active(download.state) {
                 Button("Cancel") { Task { await workspace.cancelDownload(download) } }.hubRowControl()
             }

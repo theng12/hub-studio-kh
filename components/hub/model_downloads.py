@@ -118,6 +118,17 @@ def _mark_exited(value: dict, run_id: str, process: subprocess.Popen) -> bool:
     result = process.poll()
     changed = False
     if run is not None and run.get("state") == "running" and result is not None:
+        tail = _error_tail(run_id) or ""
+        if result != 0 and "Another model import is active" in tail \
+                and int(run.get("waited") or 0) < 3:
+            # The library lock is a reason to wait, never a failure: requeue behind whatever holds
+            # it rather than writing that sentence into a row the person sees (owner 2026-11-24).
+            # Keep its original queued_at: it was first in line and does not lose its place.
+            run.update(state="queued", waited=int(run.get("waited") or 0) + 1)
+            run.pop("pid", None)
+            changed = True
+            _processes.pop(run_id, None)
+            return changed
         run.update(state="done" if result == 0 else "error", exit_code=result,
                    finished_at=time.time())
         if result == 0 and not str(run.get("source") or "").startswith("ssd:") \
@@ -148,6 +159,7 @@ def reconcile() -> dict:
                     and time.time() - float(run.get("recovery_pending_at") or 0) >= 6):
                 run.update(state="interrupted", finished_at=time.time())
                 changed = True
+        changed |= _pump(value)
         if changed:
             _write(value)
         return value
@@ -177,12 +189,163 @@ def _free_space_check(package_id: str, needed: int, library: Path) -> None:
             f"Free some space (or choose a model library on a larger disk) and try again. Nothing was downloaded.")
 
 
-def _drive_name(drive: Path) -> str:
-    """`ATLAS` from `<volume>/1 Install Apps/Hub Studio KH/model-library`, for the run's source."""
+def _drive_root(drive: Path) -> Path:
+    """The mount point a model library sits in: `<volume>/1 Install Apps/Hub Studio KH/model-library`
+    → `<volume>`. The library path itself when it is not on a kit drive."""
     for parent in Path(drive).parents:
         if parent.name.startswith("KH-STUDIO-"):
-            return parent.name[len("KH-STUDIO-"):]
-    return Path(drive).parent.name
+            return parent
+    return Path(drive).parent
+
+
+def _drive_name(drive: Path) -> str:
+    """`ATLAS` from `<volume>/1 Install Apps/Hub Studio KH/model-library`, for the run's source."""
+    root = _drive_root(drive)
+    return root.name[len("KH-STUDIO-"):] if root.name.startswith("KH-STUDIO-") else root.name
+
+
+ACTIVE_STATES = {"running", "recovery_pending"}
+
+
+def _library_of(run: dict) -> str:
+    return str((run.get("request") or {}).get("library") or "")
+
+
+def _active_run(value: dict, library: str | None = None) -> dict | None:
+    return next((run for run in value["runs"].values()
+                 if run.get("state") in ACTIVE_STATES
+                 and (library is None or _library_of(run) == library)), None)
+
+
+def _queued(value: dict) -> list[dict]:
+    return sorted((run for run in value["runs"].values() if run.get("state") == "queued"),
+                  key=lambda run: run.get("queued_at") or run.get("started_at") or 0)
+
+
+def _launch(run: dict) -> None:
+    """Start one queued run. The caller holds the lock and writes the store."""
+    request = run.get("request") or {}
+    if request.get("kind") == "import":
+        run.update(state="running", started_at=time.time(), pid=None)
+        threading.Thread(target=_run_import, args=(run["id"],), daemon=True,
+                         name=f"model-import-{run['id'][:8]}").start()
+        return
+    output = Path(request["root"]) / "output.log"
+    stream = output.open("a", encoding="utf-8")
+    output.chmod(0o600)
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-B", "-c", _PARENT_WATCH, str(os.getpid()),
+             *request["child_command"]],
+            stdout=stream, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True)
+    finally:
+        stream.close()
+    run.update(state="running", started_at=time.time(), pid=process.pid)
+    _processes[run["id"]] = process
+
+
+def _run_import(run_id: str) -> None:
+    """Import one folder in the queue's thread, then settle its row like any other run.
+
+    A folder import is the other door the owner could hit ("copying or installing models"): it waits
+    behind a download in the same library instead of taking the library lock's refusal.
+    """
+    from components import model_packages
+    with _lock:
+        value = _read()
+        run = value["runs"].get(run_id)
+        if run is None:
+            return
+        request = run.get("request") or {}
+        manifest, source = request.get("manifest"), Path(request.get("source") or "")
+        library = Path(_library_of(run))
+    state, reason = "done", None
+    try:
+        model_packages.import_folder(manifest, source, library,
+                                     catalog=request.get("catalog"))
+    except model_packages.PackageError as exc:
+        text = str(exc)
+        if "Another model import is active" in text and int(run.get("waited") or 0) < 3:
+            with _lock:
+                store = _read()
+                row = store["runs"].get(run_id)
+                if row is not None:
+                    row.update(state="queued", waited=int(row.get("waited") or 0) + 1)
+                    _pump(store)
+                    _write(store)
+            return
+        state, reason = "error", text
+    except (OSError, ValueError) as exc:
+        state, reason = "error", str(exc)
+    with _lock:
+        store = _read()
+        row = store["runs"].get(run_id)
+        if row is not None and row.get("state") not in {"cancelled"}:
+            row.update(state=state, finished_at=time.time())
+            if reason:
+                row["reason"] = reason
+        _pump(store)
+        _write(store)
+
+
+def enqueue_import(*, package_id: str, manifest: dict, library: Path, source_folder: Path,
+                   catalog: dict | None = None) -> dict:
+    """Queue a folder import. Returns the run, running now or waiting with its position."""
+    with _lock:
+        value = reconcile()
+        for existing in value["runs"].values():
+            if (existing.get("state") in {"queued", "running"}
+                    and existing.get("kind") == "import"
+                    and existing.get("package_id") == package_id
+                    and (existing.get("request") or {}).get("source") == str(source_folder)):
+                return _with_position(existing, value)
+        run_id = uuid.uuid4().hex
+        root = data_dir() / "model-download-runs" / run_id
+        root.mkdir(parents=True, mode=0o700)
+        run = {"id": run_id, "package_id": package_id, "kind": "import", "state": "queued",
+               "queued_at": time.time(), "total_bytes": 0, "source": "folder",
+               "request": {"kind": "import", "root": str(root), "library": str(library),
+                           "source": str(source_folder), "manifest": manifest,
+                           "catalog": catalog}}
+        value["runs"][run_id] = run
+        _pump(value)
+        _write(value)
+        return _with_position(value["runs"][run_id], value)
+
+
+def _pump(value: dict) -> bool:
+    """One import at a time: start the oldest queued run when nothing is active. A run whose drive
+    is gone pauses and says so instead of failing — the queue waits for a Resume (owner 2026-11-24,
+    "it's not queuing properly")."""
+    # Per library, because the lock this queues behind is per library: one import at a time in each
+    # library, and two libraries never wait for each other.
+    changed = False
+    for library in {_library_of(run) for run in _queued(value)}:
+        if _active_run(value, library) is not None:
+            continue
+        for run in _queued(value):
+            if _library_of(run) != library:
+                continue
+            drive = (run.get("request") or {}).get("drive")
+            # The mount point, not the library inside it: a drive that is attached but has no
+            # model library is a failure the child names, not a drive to wait for (gate 2026-11-24).
+            if drive and not _drive_root(drive).exists():
+                run.update(state="paused", reason=f"the {_drive_name(drive)} drive is not mounted",
+                           paused_at=time.time())
+                changed = True
+                continue
+            _launch(run)
+            changed = True
+            break
+    return changed
+
+
+def _with_position(run: dict, value: dict) -> dict:
+    public = _public(run)
+    if run.get("state") == "queued":
+        public["position"] = _queued(value).index(run) + 1
+    return public
 
 
 def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
@@ -249,32 +412,25 @@ def start(*, package_id: str, manifest: dict, catalog: dict, library: Path,
             child_command.append("--peer-only")
         if drive is not None:
             child_command.extend(("--drive", str(drive)))
-        output = root / "output.log"
-        stream = output.open("w", encoding="utf-8")
-        output.chmod(0o600)
-        try:
-            process = subprocess.Popen(
-                [sys.executable, "-I", "-B", "-c", _PARENT_WATCH, str(os.getpid()), *child_command],
-                stdout=stream, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        finally:
-            stream.close()
-        run = {"id": run_id, "package_id": package_id, "state": "running",
-               "started_at": time.time(), "pid": process.pid,
-               "total_bytes": total_bytes, "staging": staging,
+        # Every request becomes a run; `_pump` starts it or leaves it queued behind the one in
+        # flight. A second request never fails because another is running (owner 2026-11-24).
+        run = {"id": run_id, "package_id": package_id, "state": "queued",
+               "queued_at": time.time(), "total_bytes": total_bytes, "staging": staging,
                "source": (f"ssd:{_drive_name(drive)}" if drive is not None
-                          else "lan" if peer else "internet"), "peer_only": peer_only}
+                          else "lan" if peer else "internet"), "peer_only": peer_only,
+               "request": {"root": str(root), "child_command": child_command,
+                           "library": str(library),
+                           "drive": str(drive) if drive is not None else None}}
         value["runs"][run_id] = run
-        _processes[run_id] = process
+        _pump(value)
         _write(value)
-        return _public(run)
+        return _with_position(value["runs"][run_id], value)
 
 
 def status(run_id: str) -> dict | None:
     with _lock:
         value = reconcile()
-        return _public(value["runs"][run_id]) if run_id in value["runs"] else None
+        return _with_position(value["runs"][run_id], value) if run_id in value["runs"] else None
 
 
 def list_runs() -> list[dict]:
@@ -282,8 +438,10 @@ def list_runs() -> list[dict]:
     install, or a LAN copy. The app lists only the ones it started itself without this."""
     # ponytail: the whole history every read; trim old finished runs if this file ever grows large.
     with _lock:
-        runs = reconcile()["runs"].values()
-        return [_public(run) for run in sorted(runs, key=lambda r: r.get("started_at") or 0, reverse=True)]
+        value = reconcile()
+        runs = value["runs"].values()
+        return [_with_position(run, value)
+                for run in sorted(runs, key=lambda r: r.get("started_at") or 0, reverse=True)]
 
 
 def _stop_owned(run_id: str, process: subprocess.Popen) -> int | None:
@@ -316,12 +474,36 @@ def cancel(run_id: str) -> dict | None:
         value = reconcile()
         run = value["runs"].get(run_id)
         process = _processes.get(run_id)
-        if run is None or run.get("state") != "running" or process is None:
-            return _public(run) if run else None
+        if run is None:
+            return None
+        if run.get("state") in {"queued", "paused"}:
+            # A waiting run is cancelled where it waits; the next one starts at once.
+            run.update(state="cancelled", finished_at=time.time())
+            _pump(value)
+            _write(value)
+            return _public(run)
+        if run.get("state") != "running" or process is None:
+            return _public(run)
         exit_code = _stop_owned(run_id, process)
         run.update(state="cancelled", exit_code=exit_code, finished_at=time.time())
         _write(value)
         return _public(run)
+
+
+def resume(run_id: str) -> dict | None:
+    """Put a paused run back in the queue. The next read (or this call) starts it when the queue is
+    free; the drive is checked again at that moment, so Resume after remounting the drive works."""
+    with _lock:
+        value = reconcile()
+        run = value["runs"].get(run_id)
+        if run is None:
+            return None
+        if run.get("state") == "paused":
+            run.update(state="queued", queued_at=time.time())
+            run.pop("reason", None)
+            _pump(value)
+            _write(value)
+        return _with_position(run, value)
 
 
 def shutdown() -> None:

@@ -3211,6 +3211,9 @@ struct NativeDownload: Identifiable, Equatable {
     let source: String?
     /// When a finished run ended; nil while it runs, and on rows that do not say.
     let finishedAt: Double?
+    /// Waiting in line: its place, and for a paused run the reason the drive is gone.
+    let position: Int?
+    let pausedReason: String?
 }
 
 /// One saved reference clip in the voice library.
@@ -6673,6 +6676,7 @@ final class NativeWorkspaceStore: ObservableObject {
                              summary: preset.summary,
                              installedCount: preset.installedCount ?? 0,
                              packageCount: preset.packageCount ?? (preset.packages?.count ?? 0),
+                             queuedCount: preset.queuedCount ?? 0,
                              complete: preset.complete ?? false,
                              fitsThisMac: preset.fitsThisMac,
                              toCopyBytes: preset.projection?.toCopyBytes ?? 0,
@@ -6907,6 +6911,17 @@ final class NativeWorkspaceStore: ObservableObject {
         downloads.removeAll { $0.id == job.id }
     }
 
+    /// Put a paused import back in the queue (the drive came back).
+    func resumeDownload(_ job: NativeDownload) async {
+        guard let requestConnection = connectionID else { return }
+        do {
+            let _: HubModelDownload = try await sendJSON(
+                ["api", "hub", "model-downloads", job.id, "resume"], method: "POST", body: EmptyBody())
+            guard connectionID == requestConnection else { return }
+            await refresh()
+        } catch { if connectionID == requestConnection { self.error = Self.actionable(error, action: "Resume the model import") } }
+    }
+
     func cancelDownload(_ job: NativeDownload) async {
         guard let requestConnection = connectionID else { return }
         do {
@@ -6935,14 +6950,15 @@ final class NativeWorkspaceStore: ObservableObject {
             defer { if connectionID == requestConnection { updatingModels = false } }
             // The Hub's import route reads `source_folder`, so this goes through the
             // snake_case encoder rather than the camelCase one used for job envelopes.
-            let result: HubModelState = try await sendJSON(
+            // The import joins the Hub's queue: it runs now or waits its turn, and the row says
+            // which. A refusal is no longer the answer to "another import is running".
+            let run: HubModelDownload = try await sendJSON(
                 ["api", "hub", "model-packages", package.packageId, "import"],
                 method: "POST", body: HubModelImport(sourceFolder: folder.path))
             guard connectionID == requestConnection else { return }
-            // A rejected import is a 2xx with a non-ready state, not an error status, so the
-            // answer has to be read rather than assumed from the fact that the call returned.
-            try Self.requireVerified(result, model: model)
-            modelNote = "Imported \(model.label) from \(folder.lastPathComponent)."
+            modelNote = run.state == "queued"
+                ? "Queued \(model.label) behind the import already running."
+                : "Importing \(model.label) from \(folder.lastPathComponent)."
             modelNoteRepo = model.repo
             error = nil
             await refresh()
@@ -10544,7 +10560,8 @@ final class NativeWorkspaceStore: ObservableObject {
             percent: total > 0 ? min(100, Double(done) / Double(total) * 100) : 0,
             downloadedBytes: done, totalBytes: total,
             error: failed ? (reason.isEmpty ? "Hub model download \(run.state)." : reason) : nil,
-            source: run.sourceUsed ?? run.source, finishedAt: run.finishedAt)
+            source: run.sourceUsed ?? run.source, finishedAt: run.finishedAt,
+            position: run.position, pausedReason: run.reason)
     }
 
     /// The Hub answers 404 for a run it no longer knows; `validateResponse` carries the status
@@ -10556,7 +10573,7 @@ final class NativeWorkspaceStore: ObservableObject {
         NativeDownload(
             id: wire.id, repo: wire.repo, state: wire.state, percent: wire.percent ?? 0,
             downloadedBytes: wire.bytesDone ?? wire.bytesObserved ?? 0, totalBytes: wire.bytesTotal ?? 0, error: wire.error,
-            source: nil, finishedAt: nil
+            source: nil, finishedAt: nil, position: nil, pausedReason: nil
         )
     }
 
@@ -11049,6 +11066,7 @@ private struct HubModelPresetWire: Decodable {
     let packages: [String]?
     let installedCount: Int?
     let packageCount: Int?
+    let queuedCount: Int?
     let complete: Bool?
     let fitsThisMac: Bool?
     let refusedModels: [String]?
@@ -11195,6 +11213,7 @@ struct NativePreset: Identifiable, Equatable {
     let summary: String?
     let installedCount: Int
     let packageCount: Int
+    let queuedCount: Int
     let complete: Bool
     let fitsThisMac: Bool?
     let toCopyBytes: Int64
@@ -11235,6 +11254,8 @@ private struct HubModelDownload: Decodable {
     /// "lan", "internet" or "ssd:ATLAS" — the rung the copy really used.
     let source: String?; let sourceUsed: String?
     let finishedAt: Double?
+    /// Where it waits in the import queue, and why a paused run is paused (owner 2026-11-24).
+    let position: Int?; let reason: String?
 }
 private struct HubModelDownloads: Decodable { let runs: [HubModelDownload] }
 /// `POST /api/hub/model-packages/drive-check` — the same drive block the presets snapshot carries.

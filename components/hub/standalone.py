@@ -3804,12 +3804,18 @@ def create_app(*, start_background: bool = True) -> FastAPI:
 
     @app.post("/api/hub/model-packages/{package_id}/import")
     def import_model_package(package_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        from components import model_packages
+        """Queue a folder import; it waits behind whatever is importing in this library.
+
+        The owner's sentence covered "copying or installing models": a folder import is the other
+        door onto the same library lock, so it joins the same queue instead of taking the refusal.
+        """
+        from . import model_downloads
         try:
             catalog = _model_catalog()
             manifest = catalog[package_id]
-            model_packages.import_folder(manifest, Path(body.get("source_folder", "")), _model_library())
-            return _model_state(manifest, catalog, monitor)
+            return model_downloads.enqueue_import(
+                package_id=package_id, manifest=manifest, library=_model_library(),
+                source_folder=Path(body.get("source_folder", "")), catalog=catalog)
         except KeyError as exc:
             raise HTTPException(404, "unknown model package") from exc
         except (OSError, ValueError) as exc:
@@ -4228,6 +4234,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         if run is None:
             raise HTTPException(404, "unknown model download")
         await _show_finished_download(run, "local")
+        return run
+
+    @app.post("/api/hub/model-downloads/{run_id}/resume")
+    def resume_model_download(run_id: str) -> dict[str, Any]:
+        """Put a paused run back in the queue (a drive that was not mounted, then was)."""
+        from . import model_downloads
+        run = model_downloads.resume(run_id)
+        if run is None:
+            raise HTTPException(404, "unknown model download")
         return run
 
     @app.delete("/api/hub/model-downloads/{run_id}")

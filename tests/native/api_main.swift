@@ -867,8 +867,9 @@ final class FixtureProtocol: URLProtocol {
                 if rejects && action == "verify" {
                     // Exactly what the Hub sends: 200 with a non-ready state and its reason.
                     finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"invalid\",\"dispatch_state\":\"ineligible\",\"reason\":\"File changed; verify again: model/model.safetensors\"}".utf8)))
-                } else if rejects && action == "import" {
-                    finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"dependency_missing\",\"dispatch_state\":\"ineligible\",\"reason\":\"companion processor files are missing\"}".utf8)))
+                } else if action == "import" {
+                    // An import is a queue run now: it answers a run, never a refusal.
+                    finish((200, "application/json", Data("{\"id\":\"run-\(package)\",\"package_id\":\"\(package)\",\"state\":\"running\",\"bytes_done\":0,\"total_bytes\":0,\"source\":\"folder\"}".utf8)))
                 } else {
                     finish((200, "application/json", Data("{\"package_id\":\"\(package)\",\"state\":\"files_verified\",\"dispatch_state\":\"eligible\",\"reason\":null}".utf8)))
                 }
@@ -4176,7 +4177,8 @@ struct NativeAPITests {
                 "Import Folder must call the Hub package import route")
         require(FixtureProtocol.importedFolder() == "/Volumes/Backup/model-library/synthetic-custom-voice",
                 "the chosen folder must reach the Hub unchanged")
-        require(store.modelNote?.contains("Imported") == true, "an import needs a visible result")
+        require(store.modelNote?.contains("Importing") == true || store.modelNote?.contains("Queued") == true,
+                "an import needs a visible result — importing now or queued")
 
         // A refused verification arrives as 200 with state "invalid". Reporting success from
         // the fact that the call returned would show "Verified" for exactly the broken library
@@ -4187,10 +4189,8 @@ struct NativeAPITests {
                 "a refused verification must explain that a file changed, got: \(store.error ?? "nil")")
         require(store.modelNote?.contains("Verified") != true,
                 "a refused verification must not leave a success note")
-        // Import reports through the shared error banner too: a non-ready state is a refusal.
-        await store.importModel(copied, from: URL(fileURLWithPath: "/Volumes/Backup/incomplete"))
-        require(store.error?.contains("companion processor files are missing") == true,
-                "a refused import must carry the Hub's reason, got: \(store.error ?? "nil")")
+        // An import is not refused any more: it joins the queue, so a bad folder surfaces on its
+        // own run's row (the Hub's own tests assert that, `test_model_download_queue`), not here.
         FixtureProtocol.setModelVerifyRejects(false)
         store.error = nil
 

@@ -112,6 +112,21 @@ enum ViewChecks {
         check(all != nil && downloads != nil, "the Jobs page draws offscreen")
         check(all != downloads, "choosing the Downloads tab changes the page")
 
+        // A waiting copy names its place in the line, never a percentage it does not have, and a paused
+        // one does not read as downloading (owner, 2026-11-24: a second request waits in a queue).
+        func download(_ state: String, percent: Double, position: Int?) -> NativeDownload {
+            NativeDownload(id: state, repo: "vanch007/mlx-Yue2-3B", state: state, percent: percent,
+                           downloadedBytes: Int64(percent) * 10_000_000, totalBytes: 7_200_000_000,
+                           error: nil, source: "lan", finishedAt: nil, position: position, pausedReason: nil)
+        }
+        let waiting = StudioContent.downloadBadge(download("queued", percent: 0, position: 1))
+        check(waiting == "Waiting in line · position 1",
+              "a waiting download names its place, not a percentage: \(waiting)")
+        let paused = StudioContent.downloadBadge(download("paused", percent: 8, position: nil))
+        check(paused == "Paused", "a paused download does not read as downloading: \(paused)")
+        let copying = StudioContent.downloadBadge(download("running", percent: 42, position: nil))
+        check(copying == "Downloading 42%", "a copying run still shows its percentage: \(copying)")
+
         // ---- Jobs Tab Geometry Invariance, Multi-bar Independence & Reachability (2026-11-02) ----
         if let control, control.segmentCount == HistoryTab.allCases.count {
             let baselineWidth = control.fittingSize.width
@@ -324,7 +339,7 @@ enum ViewChecks {
             diskMeasured: true, stopBytes: 5_000_000_000,
             presets: [NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
                                    summary: "Adds the larger image model.", installedCount: 9,
-                                   packageCount: 10, complete: false, fitsThisMac: true,
+                                   packageCount: 10, queuedCount: 0, complete: false, fitsThisMac: true,
                                    toCopyBytes: 1_500_000_000, freeAfterBytes: 378_500_000_000,
                                    refused: nil,
                                    packageIDs: Array(repeating: "p", count: 10))],
