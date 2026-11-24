@@ -1,4 +1,4 @@
-# Studio Hub Standalone
+# Hub Studio KH
 
 Independent native macOS application project for local creation on Apple Silicon. Existing Pinokio installations and their maintenance flow remain untouched.
 
