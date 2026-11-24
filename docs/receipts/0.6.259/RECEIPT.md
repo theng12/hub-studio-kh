@@ -20,13 +20,18 @@ scan: sha256=7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c cl
 gate config: `$HOME/Developer/_orchestra/developer-media/hub-studio-kh/lead/release-0.6.259-20261124/gate-0.6.259.sh`
 gate exit: 0 — `GATE PASS hub bcc5fe6795123f1c85c6af3783197e97ba33ffb4 2026-11-24T18:51:22Z`
 gate evidence: `lead/gate-20261125-004811-50786` (run 6). Runner `gate-run.sh f05b010c16e5`.
-feed readback: **the release asset, not a feed row** — fresh anonymous read (no auth header, no token) of
-  `https://github.com/theng12/hub-studio-kh/releases/download/0.6.259/Hub.Studio.KH-0.6.259.dmg`:
-  HTTP 200, 1,483,071,488 bytes, sha256 7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c —
-  equal to the gate's artifact and to the scan receipt. Completed on attempt 4 of a resuming download
-  (three connection resets, each resumed from its own offset); `evidence/anon-readback-0.6.259.log`.
-page state: absent — the `hub` row on `kh-releases` is still at 0.6.258. This session does not sign the
-  feed; the five row values are with the Developer (M001) for S001's generator pass.
+feed readback: hub 0.6.259 — fresh anonymous read of `https://theng12.github.io/kh-releases/release.json`
+  (`published_at 2026-11-24T20:02:00.067Z`): `version 0.6.259`, `file Hub.Studio.KH-0.6.259.dmg`,
+  `bytes 1483071488`, `sha256 7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c`,
+  `type media`, `tagline "Runs AI models on this Mac for your other apps."`,
+  `holdURL http://127.0.0.1:47873/api/maintenance/hold`, `holdSince 0.6.238`,
+  `url https://github.com/theng12/hub-studio-kh/releases/download/0.6.259/Hub.Studio.KH-0.6.259.dmg`.
+  `feed-verify.sh hub --expect-version 0.6.259 --expect-sha 7b154210…6e5c --public-key …` →
+  **PASS** (`PASS signature — Ed25519 verified`, 165,640 feed bytes, 64 signature bytes).
+  Asset anonymous `curl -L` readback (no auth header, `evidence/anon-readback-0.6.259.log`):
+  HTTP 200, 1,483,071,488 bytes, sha256 `7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c` —
+  equal to the gated artifact and scan receipt.
+page state: same — the served row's url, file, length, sha256, tagline and hold pair match the published asset and gated bytes
 dirty: false
 idle footprint: **95 MB after 600 s, 28 MB lower than at start**, ceiling 500 MB — measured by the gate
   config's own `idle-footprint` step, which started the staged build's Hub worker (`hub_worker.py`, the
@@ -35,10 +40,14 @@ idle footprint: **95 MB after 600 s, 28 MB lower than at start**, ceiling 500 MB
   the config; both facts are true. 0.6.258's equivalent figure was 64 MB / −58 MB, and 0.6.257's shell-only
   figure (service not started) was 103 → 75 MB — this number includes the service.
 retired: 0.6.257 installer (1,483,247,616 bytes, sha256 `e52628d63de1a261c14723aa282884f73626fe1786365a8aff5a34d09c933b6c`) plus `worktrees/0.6.258` (`4dd1f590`) and `worktrees/0.6.259` (`bcc5fe67`) moved to `$HOME/Desktop/_trash/hub-studio-kh/` with manifests (nothing freed until the owner empties the trash)
-not proven: (1) the feed row itself — `/kh-releases` still serves 0.6.258 for `hub` until S001 signs it;
-  (2) the Launcher's automatic install on this Mac and on a fleet Mac (the self-update demonstration is
-  queued after the row is served); (3) a whole-fleet run state of the idle-footprint acceptance — only the
-  idle-after-one-cycle state was measured, and no lean-mode whole-kit run exists for Hub yet.
+not proven: (1) live self-update on this Mac (0.6.258 → 0.6.259) stopped at the visible-window guard:
+  neither `Hub Studio KH.app` nor `Studio Launcher KH.app` is installed in `/Applications`,
+  `com.khupdater.agent` is unloaded (`~/Library/KHUpdater/base/config.json` has no `hub` entry), and
+  `Recipes.swift:1482` relaunches with `open -g -j` while `native/StudioHub.swift:1337,1457-1459` calls
+  `openWindow()` (`window?.makeKeyAndOrderFront(nil)` + `NSApp.activate(ignoringOtherApps: true)`) whenever
+  `!loginLaunch || !controller.hasLibrary` (`~/StudioHubModels` is absent here) — so a live relaunch would
+  bring a visible window onto the owner's desktop; (2) whole-fleet / long-run states of the idle-footprint
+  acceptance — only the idle-after-one-cycle state was measured.
 
 ## Gate runs — every attempt, kept as what it was
 
@@ -131,11 +140,9 @@ retired: `Hub Studio KH-0.6.257.dmg` (1,483,247,616 bytes, sha256 `e52628d63de1a
 
 - gate log: `lead/gate-20261125-004811-50786/summary.txt`, `step-*.log` beside it; the passing run's full
   console at `lead/release-0.6.259-20261124/gate-run-6.log`
-- readback command and output: `curl -fsSL -C - -o dl <browser_download_url>` (no auth header), resuming
-  after three connection resets →
-  `bytes=1483071488 sha=7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c`; log at
-  `lead/release-0.6.259-20261124/evidence/anon-readback-0.6.259.log`
+- readback command and output:
+  - feed: `feed-verify.sh hub --expect-version 0.6.259 --expect-sha 7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c --public-key <pinned-key>` → `PASS signature — Ed25519 verified`, `published 2026-11-24T20:02:00.067Z`, `PASS`
+  - asset: `curl -fsSL -C - -o dl <browser_download_url>` (no auth header), resuming after three connection resets → `bytes=1483071488 sha=7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c`; log at `lead/release-0.6.259-20261124/evidence/anon-readback-0.6.259.log`
 - idle footprint: `lead/gate-20261125-004811-50786/step-idle-footprint.log` —
   `idle footprint: pid 73384 = 95 MB after 600s, -28 MB while idle (ceiling 500 MB)`
-- install acceptance: UNMEASURED — the Launcher's automatic install; the self-update demonstration on this
-  Mac follows the served row and its readback is recorded in the state file
+- install acceptance: UNMEASURED — stopped at the visible-window guard (see `not proven`: `Hub Studio KH.app` and `Studio Launcher KH.app` are absent from `/Applications`, `com.khupdater.agent` is unloaded with no `hub` entry, and `native/StudioHub.swift:1337,1457-1459` calls `openWindow()` + `NSApp.activate(ignoringOtherApps: true)` on `open -g -j` relaunch when `!loginLaunch || !controller.hasLibrary`)
