@@ -760,7 +760,7 @@ struct PageRenderHarness {
                 id: "fixture-ssd-failure", repo: "qwen-image-2-1-turbo-mflux-q4", state: "error",
                 percent: 12, downloadedBytes: 1_200_000_000, totalBytes: 10_000_000_000,
                 error: "sha256 mismatch on model.safetensors", source: "ssd:ATLAS",
-                finishedAt: Date().timeIntervalSince1970))
+                finishedAt: Date().timeIntervalSince1970, position: nil, pausedReason: nil))
         }
     }
 
@@ -964,11 +964,20 @@ struct PageRenderHarness {
         workspace.downloads = [
             NativeDownload(id: "fixture-download", repo: "vanch007/mlx-Yue2-3B", state: "running",
                            percent: 42, downloadedBytes: 3_000_000_000, totalBytes: 7_200_000_000,
-                           error: nil, source: "lan", finishedAt: nil),
+                           error: nil, source: "lan", finishedAt: nil, position: nil, pausedReason: nil),
+            // A second request waiting its turn, and one whose drive went away: the 0.6.259 queue
+            // shows both rows on the Set up sheet, so the release's own screens carry them.
+            NativeDownload(id: "fixture-queued", repo: "qwen36-35b-4bit", state: "queued",
+                           percent: 0, downloadedBytes: 0, totalBytes: 19_800_000_000,
+                           error: nil, source: "internet", finishedAt: nil, position: 1, pausedReason: nil),
+            NativeDownload(id: "fixture-paused", repo: "breeze-tts-2-mlx-4bit", state: "paused",
+                           percent: 8, downloadedBytes: 400_000_000, totalBytes: 4_900_000_000,
+                           error: nil, source: "ssd:ATLAS", finishedAt: nil, position: nil,
+                           pausedReason: "ATLAS is not connected"),
             NativeDownload(id: "fixture-finished", repo: "whisper-turbo", state: "done",
                            percent: 100, downloadedBytes: 1_600_000_000, totalBytes: 1_600_000_000,
                            error: nil, source: "internet",
-                           finishedAt: Date().timeIntervalSince1970 - 1800),
+                           finishedAt: Date().timeIntervalSince1970 - 1800, position: nil, pausedReason: nil),
         ]
         // One job in every live or failed state, so the badges and progress lines are looked at too.
         func live(_ id: String, _ state: String, _ model: String, _ prompt: String, progress: Double = 0,
