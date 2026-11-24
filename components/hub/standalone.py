@@ -4230,6 +4230,15 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         await _show_finished_download(run, "local")
         return run
 
+    @app.post("/api/hub/model-downloads/{run_id}/resume")
+    def resume_model_download(run_id: str) -> dict[str, Any]:
+        """Put a paused run back in the queue (a drive that was not mounted, then was)."""
+        from . import model_downloads
+        run = model_downloads.resume(run_id)
+        if run is None:
+            raise HTTPException(404, "unknown model download")
+        return run
+
     @app.delete("/api/hub/model-downloads/{run_id}")
     def cancel_model_download(run_id: str) -> dict[str, Any]:
         from . import model_downloads

@@ -71,6 +71,10 @@ second=model_downloads.start(package_id="fixture-shutdown", manifest=shutdown_ma
 # A run that already finished (its child exited 0, nobody asked since) stays done through an update's stop.
 other=root/"models2"; other.mkdir(); model_packages.import_folder(manifest, source, other)
 finished=model_downloads.start(package_id="fixture", manifest=manifest, catalog={"fixture":manifest}, library=other, sources={})
+# A run may start behind another one now: wait for the queue to reach it.
+for _ in range(120):
+    if finished["id"] in model_downloads._processes: break
+    time.sleep(.05)
 model_downloads._processes[finished["id"]].wait(timeout=10)
 model_downloads.shutdown()
 assert model_downloads.status(second["id"])["state"] == "interrupted"

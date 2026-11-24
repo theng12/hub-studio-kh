@@ -10650,3 +10650,13 @@ Kit preparation, installer lookup and drive instructions now use `1 Install Apps
 - It runs in `packaging/yue2-runtime/build.sh` after the smoke imports and **before** the content digest, so the tree is clean from the moment it is built. The already-built canonical `.build/yue2-runtime` was neutralised in place (same packages, same processes) and `YUE2_RUNTIME_SHA256` re-pinned to `5380877f…6d48`; the previous pin is recorded beside it.
 - `sys.prefix` does not come from this file — it is derived from the interpreter’s own location — so a runtime inside the app still reports its real prefix. Proven by starting the neutralised tree: `get_config_var('prefix')` is the neutral root, `sys.prefix` is the tree’s real location, `mlx.core` and `mlx_lm` import, and `mlx` is still 0.32.2.
 - Tests: `tests/test_yue2_runtime_prefix.py` (5 — every home path replaced, a clean tree left byte-identical, no recorded prefix refused rather than guessed, a missing file not an error, and the real runtime neutralised end to end: no file names the builder, the dylib id is the neutral root, and the interpreter still starts, imports and reports its own prefix).
+
+## 0.6.249 — 2026-11-19
+
+- **The app no longer names this estate.** A machine-naming scheme that included the estate's name had leaked into the app's own documents and audit records — a fleet name is personal even with no address behind it. Every occurrence is gone: the downloaded app names nobody and no site.
+
+### Technical notes
+- Scrubbed from every file the app ships: `components/voice/audit_contract_runtime.py` (the audit anchor's `canary_target`), the five `components/voice/model-audits/*.audit.json` records, three comments in `components/hub/backend/broker.py`, one in `components/voice/app/backend/generation.py`, two lines in each changelog, and one comment in `native/StudioAPI.swift`.
+- The fleet-name parser is generalised rather than renamed: `generated_hub_hostname()` reads `<machine_prefix>-<host>-<id8>-hub` and returns whatever sits between the profile's own prefix and the generated id, so no estate or fleet name appears in the pattern and a renamed Mac or a new site needs no code change.
+- The v1 audit record's byte pin moved once, deliberately, with a comment saying why: the record changed (its canary target was a host name), and it is frozen again from this release so a later edit still cannot slip into a measured record.
+- Tests: `components/voice/app/tests/test_model_audit_contract.py` (26) green, including the moved pin.

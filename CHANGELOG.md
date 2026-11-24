@@ -2,6 +2,20 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.259 — 2026-11-24
+
+- **Starting several model downloads no longer fails the ones that come after.** The first one runs; anything you start while it runs waits in line and begins by itself, so a 32 GB download and the next click both finish without you going back to them. A refused click is no longer listed under "Finished today" — waiting is not a failure.
+- **A drive that goes away pauses the copy instead of failing it.** Plug the drive back in and Resume continues from where it stopped.
+- **A preset is one job now.** Installing a preset queues everything it still needs in the same line, and each package starts as the one before it ends.
+
+### Technical notes
+- `components/hub/model_downloads.py` — every request becomes a run. `_pump` starts the oldest queued run once no run in that library is active (the lock is per library, so two libraries never wait for each other), and a run whose drive is gone pauses with a reason and a Resume. A child that exits on "Another model import is active" goes back in line up to three times instead of failing, so that sentence can never reach a row a person reads. Cancel works on a waiting run and lets the next one start.
+- `components/hub/standalone.py` — `POST /api/hub/model-downloads/{run_id}/resume`.
+- The app already treats `queued` and `paused` as active and shows them under Downloading, so the queue needed no native change; the preset button already starts packages one at a time and now queues them.
+- `app-meta.json` — the feed generator's first read: name, bundle id, `type media`, tagline, description, and the hold pair (`hold_url` on 47873, `hold_since 0.6.238`).
+- Tests: `tests/test_model_download_queue.py` (6) — position and no refusal, self-starting, pause and resume on a lost drive, cancel starting the one behind it, the refusal sentence never in a row, and the bounded wait.
+
+
 ## 0.6.258 — 2026-11-23
 
 - **Hub carries nothing of yours when it leaves this Mac.** The project's own files no longer name a person's home folder or a machine on your network, so the project can be published without exposing either. Nothing you use changes: every path still resolves on your Mac, and the drive kit behaves exactly as before.
@@ -113,13 +127,3 @@ Plain-language changes appear first in each release and feed the app’s What’
 - Refusals: `broker.note_refusal()` stores `{code, message, at}` in the per-machine protection state at both `INSUFFICIENT_MEMORY` hand-back points, cleared by `_mark_machine_success()`; `fleet_overview()` copies it onto the row as `refusal {code,message,age_s}` and the native row shows it as a caption only while that Mac has no current job.
 - Quit: `QuitDecision.shouldChallengeQuit(source:busy:attended:)` — a person's or unknown quit while busy and attended may still be challenged; an installer-sourced stop never is. The source is `/api/health`'s `update_hold_active`, set only by a `POST /api/maintenance/hold` authenticated with the installer's 0600 hold token (`auth.installer_hold_request`) and self-expiring after `dispatch_paused_s`.
 - Tests: `tests/test_terminal_lifecycle_0250.py` (7), `tests/test_fleet_refusal_reason_0250.py` (3), `tests/native/lifecycle_main.swift` (the updater-stop case fails without this change — exit 133 on the old attendance gate).
-
-## 0.6.249 — 2026-11-19
-
-- **The app no longer names this estate.** A machine-naming scheme that included the estate's name had leaked into the app's own documents and audit records — a fleet name is personal even with no address behind it. Every occurrence is gone: the downloaded app names nobody and no site.
-
-### Technical notes
-- Scrubbed from every file the app ships: `components/voice/audit_contract_runtime.py` (the audit anchor's `canary_target`), the five `components/voice/model-audits/*.audit.json` records, three comments in `components/hub/backend/broker.py`, one in `components/voice/app/backend/generation.py`, two lines in each changelog, and one comment in `native/StudioAPI.swift`.
-- The fleet-name parser is generalised rather than renamed: `generated_hub_hostname()` reads `<machine_prefix>-<host>-<id8>-hub` and returns whatever sits between the profile's own prefix and the generated id, so no estate or fleet name appears in the pattern and a renamed Mac or a new site needs no code change.
-- The v1 audit record's byte pin moved once, deliberately, with a comment saying why: the record changed (its canary target was a host name), and it is frozen again from this release so a later edit still cannot slip into a measured record.
-- Tests: `components/voice/app/tests/test_model_audit_contract.py` (26) green, including the moved pin.
