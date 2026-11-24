@@ -2012,6 +2012,16 @@ class ImageTestRunner:
             if len(gaps) > 4096:
                 gaps = gaps[-4096:]
 
+        # A stop that arrived while the child was exiting still reads as a stop. shutdown() sets the
+        # cancel event before it kills the child, so a child that died with a half-written output
+        # was settling as output_invalid/failed and beating the operator's own action — gate run 8
+        # (2026-11-24) failed on exactly that race. The event is set before the kill, so its reason
+        # is the truest description of why this attempt ended.
+        if cancel_event is not None and cancel_event.is_set():
+            stop_code = getattr(cancel_event, "reason_code", None) or "cancel_requested"
+            stop_detail = getattr(cancel_event, "reason_detail",
+                                  "the test was cancelled by the node")
+
         if float(identity.get("create_time", 0.0)) > 0:
             proof = self._stop_identity(identity, known_pids=list(known.values()),
                                         reap=lambda: process.poll())

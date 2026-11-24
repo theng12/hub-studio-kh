@@ -109,7 +109,18 @@ VIDEO_MODEL_PACKAGE = 'ltx-2-3-22b-ram-12gb-mlx'
 # paths (one identical digest) and by a real generation (81.36 s, 48 kHz stereo, RMS 0.161, sha256
 # f44dbc4a5c1e4b45fdff77487c031dfe9dfb14006c299083067e9b2b19dff147, evidence in Hub Lead 004's
 # receipt). Earlier values stay in git history.
-YUE2_RUNTIME_SHA256 ='9a47de1869bf569aa9f491f4ee524f5de23c68750d7604159917e1df63f60837'
+#
+# **Re-qualified 2026-11-24**, at 0.6.258. The 2026-11-21 tree above cannot be reproduced: it was
+# built by an older uv/CPython toolchain that no longer produces the same files here, and no copy of
+# it survives to compare against. The first replacement was worse than a mismatch: the tree already
+# sitting in `.build` was a build whose log stopped after `uv pip install`, so it kept 21
+# `/Users/<name>` records in its generated sysconfig and one in `libpython`'s install name — the
+# home-path gate check found both (run 9), and `rebuild_build_inputs` now refuses such a tree. The
+# tree the tracked builder produces is the qualified one: `neutralize_prefix.py` rewrites both
+# carriers, and a real generation on this Mac passed (8.0 s, 48 kHz stereo, 3,071,576 bytes, sha256
+# 44a4481e1fd660e647fedbc9493268f0cacb505c6c58a82e08cfa714daef5f69). Earlier values stay in git
+# history; evidence in lead/release-0.6.258-20261123/RECEIPT.md.
+YUE2_RUNTIME_SHA256 ='e2e4d1df8233d269aacecd916e225f3823865ec063ee32f24acfd373e463f3b5'
 
 # What a Hub release ships, declared here so a build cannot quietly narrow it.
 #

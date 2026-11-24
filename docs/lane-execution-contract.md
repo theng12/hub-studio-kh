@@ -353,7 +353,7 @@ publish nothing where nothing states one:
    so a version field carried a non-version. Each worker now reports the release it was staged from,
    and the Hub refuses to republish a value that cannot be a version
    (`monitor.reported_app_version`), so the defect cannot return through a new worker either.
-3. **A 401 from `studio-mac` on `/studio/voice/api/transcribe/availability`.**
+3. **A 401 from a controller on `/studio/voice/api/transcribe/availability`.**
    The path *is* inside the fleet scope (`auth._FLEET_STUDIO` includes `voice`), so this is a
    credential question between that controller and that node, not a scope gap. The Hub side of the
    fix is to make the refusal self-describing: which credential was presented, which one the route

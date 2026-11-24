@@ -88,6 +88,9 @@ if [[ -e "$OUTPUT_DIR" ]]; then
 fi
 mkdir -p "$OUTPUT_DIR"
 cp -R "$(dirname "$(dirname "$BASE_PYTHON")")/." "$OUTPUT_DIR/"
+# The uv-managed CPython distribution carries a `BUILD` stamp (its own download date) at its root;
+# it is build-machine metadata, never runtime content, and `check-build-junk` refuses it below.
+find "$OUTPUT_DIR" -maxdepth 1 -name BUILD -delete
 PYTHON="$OUTPUT_DIR/bin/python3"
 "$PYTHON" -V
 
@@ -98,7 +101,7 @@ uv pip install --break-system-packages --python "$PYTHON" -r "$REQUIREMENTS"
 # the environment and named in the smoke check.
 uv pip install --break-system-packages --python "$PYTHON" --no-deps --no-editable \
   --no-build-isolation "$YUE2_SOURCE"
-find "$OUTPUT_DIR/lib" -name direct_url.json -delete
+find "$OUTPUT_DIR/lib" \( -name direct_url.json -o -name uv_cache.json \) -delete
 
 VENDOR="$OUTPUT_DIR/lib/mlx-yue-source"
 mkdir -p "$VENDOR"
