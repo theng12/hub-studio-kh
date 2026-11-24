@@ -189,12 +189,19 @@ def _free_space_check(package_id: str, needed: int, library: Path) -> None:
             f"Free some space (or choose a model library on a larger disk) and try again. Nothing was downloaded.")
 
 
-def _drive_name(drive: Path) -> str:
-    """`ATLAS` from `<volume>/1 Install Apps/Hub Studio KH/model-library`, for the run's source."""
+def _drive_root(drive: Path) -> Path:
+    """The mount point a model library sits in: `<volume>/1 Install Apps/Hub Studio KH/model-library`
+    → `<volume>`. The library path itself when it is not on a kit drive."""
     for parent in Path(drive).parents:
         if parent.name.startswith("KH-STUDIO-"):
-            return parent.name[len("KH-STUDIO-"):]
-    return Path(drive).parent.name
+            return parent
+    return Path(drive).parent
+
+
+def _drive_name(drive: Path) -> str:
+    """`ATLAS` from `<volume>/1 Install Apps/Hub Studio KH/model-library`, for the run's source."""
+    root = _drive_root(drive)
+    return root.name[len("KH-STUDIO-"):] if root.name.startswith("KH-STUDIO-") else root.name
 
 
 ACTIVE_STATES = {"running", "recovery_pending"}
@@ -321,8 +328,10 @@ def _pump(value: dict) -> bool:
             if _library_of(run) != library:
                 continue
             drive = (run.get("request") or {}).get("drive")
-            if drive and not Path(drive).exists():
-                run.update(state="paused", reason=f"the drive at {drive} is not mounted",
+            # The mount point, not the library inside it: a drive that is attached but has no
+            # model library is a failure the child names, not a drive to wait for (gate 2026-11-24).
+            if drive and not _drive_root(drive).exists():
+                run.update(state="paused", reason=f"the {_drive_name(drive)} drive is not mounted",
                            paused_at=time.time())
                 changed = True
                 continue
