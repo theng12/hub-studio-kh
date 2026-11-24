@@ -157,5 +157,25 @@ class ModelDownloadQueueTests(unittest.TestCase):
         self.assertEqual(row["exit_code"], 2)
 
 
+    def test_a_folder_import_joins_the_queue_instead_of_taking_the_refusal(self):
+        """The other door onto the same library lock: a second import while one runs waits."""
+        self.start("download")
+        manifest = self.manifest("folder")
+        queued = self.module.enqueue_import(package_id="folder", manifest=manifest,
+                                            library=self.library,
+                                            source_folder=self.data / "not-yet",
+                                            catalog={"folder": manifest})
+        self.assertEqual(queued["state"], "queued")
+        self.assertEqual(queued["position"], 1)
+        self.assertEqual(self.module._read()["runs"][queued["id"]]["kind"], "import")
+        self.assertNotIn("Another model import is active", str(queued))
+
+    def test_a_paused_run_can_be_cancelled_where_it_waits(self):
+        missing = self.data / "KH-STUDIO-GONE" / "model-library"
+        paused = self.start("one", drive=missing)
+        cancelled = self.module.cancel(paused["id"])
+        self.assertEqual(cancelled["state"], "cancelled")
+
+
 if __name__ == "__main__":
     unittest.main()

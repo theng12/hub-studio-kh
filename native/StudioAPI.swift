@@ -6950,14 +6950,15 @@ final class NativeWorkspaceStore: ObservableObject {
             defer { if connectionID == requestConnection { updatingModels = false } }
             // The Hub's import route reads `source_folder`, so this goes through the
             // snake_case encoder rather than the camelCase one used for job envelopes.
-            let result: HubModelState = try await sendJSON(
+            // The import joins the Hub's queue: it runs now or waits its turn, and the row says
+            // which. A refusal is no longer the answer to "another import is running".
+            let run: HubModelDownload = try await sendJSON(
                 ["api", "hub", "model-packages", package.packageId, "import"],
                 method: "POST", body: HubModelImport(sourceFolder: folder.path))
             guard connectionID == requestConnection else { return }
-            // A rejected import is a 2xx with a non-ready state, not an error status, so the
-            // answer has to be read rather than assumed from the fact that the call returned.
-            try Self.requireVerified(result, model: model)
-            modelNote = "Imported \(model.label) from \(folder.lastPathComponent)."
+            modelNote = run.state == "queued"
+                ? "Queued \(model.label) behind the import already running."
+                : "Importing \(model.label) from \(folder.lastPathComponent)."
             modelNoteRepo = model.repo
             error = nil
             await refresh()

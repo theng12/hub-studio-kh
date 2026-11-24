@@ -216,8 +216,13 @@ def _queued(value: dict) -> list[dict]:
 
 
 def _launch(run: dict) -> None:
-    """Start one queued run's child. The caller holds the lock and writes the store."""
+    """Start one queued run. The caller holds the lock and writes the store."""
     request = run.get("request") or {}
+    if request.get("kind") == "import":
+        run.update(state="running", started_at=time.time(), pid=None)
+        threading.Thread(target=_run_import, args=(run["id"],), daemon=True,
+                         name=f"model-import-{run['id'][:8]}").start()
+        return
     output = Path(request["root"]) / "output.log"
     stream = output.open("a", encoding="utf-8")
     output.chmod(0o600)
@@ -231,6 +236,75 @@ def _launch(run: dict) -> None:
         stream.close()
     run.update(state="running", started_at=time.time(), pid=process.pid)
     _processes[run["id"]] = process
+
+
+def _run_import(run_id: str) -> None:
+    """Import one folder in the queue's thread, then settle its row like any other run.
+
+    A folder import is the other door the owner could hit ("copying or installing models"): it waits
+    behind a download in the same library instead of taking the library lock's refusal.
+    """
+    from components import model_packages
+    with _lock:
+        value = _read()
+        run = value["runs"].get(run_id)
+        if run is None:
+            return
+        request = run.get("request") or {}
+        manifest, source = request.get("manifest"), Path(request.get("source") or "")
+        library = Path(_library_of(run))
+    state, reason = "done", None
+    try:
+        model_packages.import_folder(manifest, source, library,
+                                     catalog=request.get("catalog"))
+    except model_packages.PackageError as exc:
+        text = str(exc)
+        if "Another model import is active" in text and int(run.get("waited") or 0) < 3:
+            with _lock:
+                store = _read()
+                row = store["runs"].get(run_id)
+                if row is not None:
+                    row.update(state="queued", waited=int(row.get("waited") or 0) + 1)
+                    _pump(store)
+                    _write(store)
+            return
+        state, reason = "error", text
+    except (OSError, ValueError) as exc:
+        state, reason = "error", str(exc)
+    with _lock:
+        store = _read()
+        row = store["runs"].get(run_id)
+        if row is not None and row.get("state") not in {"cancelled"}:
+            row.update(state=state, finished_at=time.time())
+            if reason:
+                row["reason"] = reason
+        _pump(store)
+        _write(store)
+
+
+def enqueue_import(*, package_id: str, manifest: dict, library: Path, source_folder: Path,
+                   catalog: dict | None = None) -> dict:
+    """Queue a folder import. Returns the run, running now or waiting with its position."""
+    with _lock:
+        value = reconcile()
+        for existing in value["runs"].values():
+            if (existing.get("state") in {"queued", "running"}
+                    and existing.get("kind") == "import"
+                    and existing.get("package_id") == package_id
+                    and (existing.get("request") or {}).get("source") == str(source_folder)):
+                return _with_position(existing, value)
+        run_id = uuid.uuid4().hex
+        root = data_dir() / "model-download-runs" / run_id
+        root.mkdir(parents=True, mode=0o700)
+        run = {"id": run_id, "package_id": package_id, "kind": "import", "state": "queued",
+               "queued_at": time.time(), "total_bytes": 0, "source": "folder",
+               "request": {"kind": "import", "root": str(root), "library": str(library),
+                           "source": str(source_folder), "manifest": manifest,
+                           "catalog": catalog}}
+        value["runs"][run_id] = run
+        _pump(value)
+        _write(value)
+        return _with_position(value["runs"][run_id], value)
 
 
 def _pump(value: dict) -> bool:
