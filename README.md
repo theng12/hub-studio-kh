@@ -14,6 +14,14 @@ contract is integrated, and the bounded runtime/staging/supervision continuation
 [the Music recovery card](docs/tasks/MUSIC-RECOVERY.md). Music is not yet exposed in the native
 workflow and no real Music model inference is claimed.
 
+## What it looks like
+
+![The Hub overview: the jobs running on this Mac, the queue behind them, and how many models are installed](docs/screenshots/overview-light.png)
+
+![Connections: the Macs in this Hub's group and the model each one is serving to the others](docs/screenshots/connections-light.png)
+
+Also in `docs/screenshots/`: [the overview in dark mode](docs/screenshots/overview-dark.png) and [Connections in dark mode](docs/screenshots/connections-dark.png). Both screens were captured from this build with demo content, not from a live machine.
+
 ## Current direction — 2026-09-15
 
 The focused release is **Hub + Image Studio + Voice Studio + Subtitle Studio**.
