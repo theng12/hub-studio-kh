@@ -324,7 +324,7 @@ enum ViewChecks {
             diskMeasured: true, stopBytes: 5_000_000_000,
             presets: [NativePreset(id: "creator-16", name: "Creator · 16 GB", tierGB: 16,
                                    summary: "Adds the larger image model.", installedCount: 9,
-                                   packageCount: 10, complete: false, fitsThisMac: true,
+                                   packageCount: 10, queuedCount: 0, complete: false, fitsThisMac: true,
                                    toCopyBytes: 1_500_000_000, freeAfterBytes: 378_500_000_000,
                                    refused: nil,
                                    packageIDs: Array(repeating: "p", count: 10))],
