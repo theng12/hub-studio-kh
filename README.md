@@ -18,9 +18,9 @@ workflow and no real Music model inference is claimed.
 
 ![The Hub overview: the jobs running on this Mac, the queue behind them, and how many models are installed](docs/screenshots/overview-light.png)
 
-![Connections: the Macs in this Hub's group and the model each one is serving to the others](docs/screenshots/connections-light.png)
+![Model downloads: one copying, one waiting its turn in the line, and one paused with its reason and a Resume](docs/screenshots/downloads-light.png)
 
-Also in `docs/screenshots/`: [the overview in dark mode](docs/screenshots/overview-dark.png) and [Connections in dark mode](docs/screenshots/connections-dark.png). Both screens were captured from this build with demo content, not from a live machine.
+Also in `docs/screenshots/`: [the overview in dark mode](docs/screenshots/overview-dark.png) and [model downloads in dark mode](docs/screenshots/downloads-dark.png). Both screens were captured from this build with demo content, not from a live machine.
 
 ## Current direction — 2026-09-15
 
