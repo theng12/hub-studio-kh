@@ -52,7 +52,19 @@ PY
 
 python3 "$ROOT_DIR/tests/native/render_fixture_patch.py" "$WORK/StudioAPI.swift" "$WORK/StudioViews.swift" "$WORK/ReleaseNotes.swift" "$WORK/StudioHub.swift"
 
+SPARKLE_DIR="${KH_SPARKLE_DIR:-$ROOT_DIR/vendor/khsparkle}"
+SPARKLE_FLAGS=()
+if [ -f "$SPARKLE_DIR/libkhsparkle.a" ] && [ -f "$SPARKLE_DIR/khsparkle.h" ] && [ -d "$SPARKLE_DIR/Sparkle.framework" ]; then
+  SPARKLE_FLAGS=(
+    -F "$SPARKLE_DIR"
+    -framework Sparkle
+    -L "$SPARKLE_DIR" -lkhsparkle
+    -import-objc-header "$SPARKLE_DIR/khsparkle.h"
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  )
+fi
 xcrun swiftc -sdk "$SDK_PATH" -target arm64-apple-macos14.0 -parse-as-library \
+  "${SPARKLE_FLAGS[@]}" \
   "$WORK"/*.swift "$ROOT_DIR/tests/native/render_main.swift" \
   "$ROOT_DIR/tests/native/jobs_transition_capture.swift" -o "$WORK/render-page"
-"$WORK/render-page" "$PAGE" "$OUT" "$@"
+DYLD_FRAMEWORK_PATH="$SPARKLE_DIR" "$WORK/render-page" "$PAGE" "$OUT" "$@"

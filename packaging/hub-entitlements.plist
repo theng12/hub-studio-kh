@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Library validation off, on the app - the process that loads Sparkle.framework. A framework
+       signed with the app's own identity loads fine today, because Hub does not enable the hardened
+       runtime; the exemption is here so that switch cannot turn into a launch-killer (Displays 0.1.8
+       died one second in with "different Team IDs" without it). Entitlements belong to the running
+       process, not the loaded code, so the framework is signed plain and this file is applied to the
+       app alone. It lives beside the bundle in the repo, never inside it: a file added after signing
+       breaks the seal. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

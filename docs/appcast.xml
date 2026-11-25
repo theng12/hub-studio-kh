@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Hub Studio KH</title>
+    <link>https://theng12.github.io/hub-studio-kh/appcast.xml</link>
+    <description>Hub Studio KH releases</description>
+    <language>en</language>
+  </channel>
+</rss>

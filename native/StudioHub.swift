@@ -15,6 +15,24 @@ import Darwin
 /// rotated by the system, so there is no file to bound.
 ///   log show --last 5m --predicate 'subsystem == "kh.studiohub"'
 private let startupLog = Logger(subsystem: "kh.studiohub", category: "startup")
+private let updaterLog = Logger(subsystem: "kh.studiohub", category: "updater")
+
+/// The Sparkle shim's state callback: 0 idle, 1 updating, 2 relaunching. A C function pointer
+/// cannot capture, so this lives at file scope. State 2 means Sparkle has already taken the
+/// Hub's own maintenance hold (`POST /api/maintenance/hold` with the 0600 hold token) and is
+/// about to terminate the app to swap in the update.
+private func khSparkleStateChanged(_ state: Int32) {
+    updaterLog.notice("kh-sparkle state \(state, privacy: .public)")
+    FileHandle.standardError.write(Data("kh-sparkle: state \(state)\n".utf8))
+}
+
+/// True when this process was launched explicitly headless/backgrounded (hidden smoke or
+/// self-update verification): stay Dock-less (`accessory`) and never open a window in front of
+/// anyone, even on an isolated data directory with no library yet.
+private func isBackgroundLaunch() -> Bool {
+    ProcessInfo.processInfo.environment["STUDIOHUB_BACKGROUND"] == "1"
+        || CommandLine.arguments.contains("--background")
+}
 
 /// The real old-registration reader, in one place. Kept behind injected closures on the
 /// controller so the migration decision is testable without linking ServiceManagement.
@@ -1153,6 +1171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Who asked for this stop, read from the Hub's fresh hold state. The route that set it is
     /// authenticated by the updater's 0600 token; a read that fails is `.unknown`, never updater.
     lazy var quitSource: () async -> QuitSource = { [unowned self] in
+        if kh_sparkle_state() == 2 { return .updater }
         guard let data = readPrivateRegularFile(self.controller.configuration.readyFile),
               let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let address = record["url"] as? String,
@@ -1314,15 +1333,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         workstationTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshWorkstation() }
         }
+        let backgroundLaunch = isBackgroundLaunch()
         failureObserver = controller.$failure.dropFirst().compactMap { $0 }.sink { [weak self] _ in
-            guard self?.workstation.quiet != true else { return }   // a shop's Mac: logged, not shown
+            guard !backgroundLaunch, self?.workstation.quiet != true else { return }   // a shop's Mac or hidden run: logged, not shown
             self?.openWindow()
         }
         controller.onStopped = { [weak self] in self?.engineStopped() }
         // Decided before the window opens, and only once per launch. The launchd agent starts the
         // executable directly, so it carries the login marker in its environment; a login item
         // launch carries the AppleEvent instead.
-        announceReleaseNotes = !workstation.quiet && ReleaseNotesSeen.shouldAnnounce()
+        announceReleaseNotes = !backgroundLaunch && !workstation.quiet && ReleaseNotesSeen.shouldAnnounce()
         let agentLaunch = ProcessInfo.processInfo.environment[LaunchAgent.launchedAtLoginEnvironmentKey] == "1"
         let loginLaunch = agentLaunch || NSAppleEventManager.shared().currentAppleEvent?
             .paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
@@ -1331,10 +1351,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             print("QUIT_ATTENDED isActive=\(NSApp.isActive) windowVisible=\(window?.isVisible ?? false) login=\(loginLaunch) autoTermination=\(ProcessInfo.processInfo.automaticTerminationSupportEnabled)")
             exit(0)
         }
+        // Start the Sparkle shim once, after the menu-bar item exists (INTEGRATION.md §2). It
+        // reads SUFeedURL, SUPublicEDKey, KHHoldURL and KHHoldTokenFile from Info.plist, takes
+        // the Hub's maintenance hold before any feed fetch or download, and draws no UI. A refusal
+        // is logged plainly here — never a dialog and never an unheld swap.
+        kh_sparkle_set_state_callback(khSparkleStateChanged)
+        if kh_sparkle_start() != 0 {
+            let reason = String(cString: kh_sparkle_last_error())
+            updaterLog.notice("kh-sparkle refused: \(reason, privacy: .public)")
+            FileHandle.standardError.write(Data("kh-sparkle: refused: \(reason)\n".utf8))
+        } else {
+            updaterLog.notice("kh-sparkle started")
+            FileHandle.standardError.write(Data("kh-sparkle: started\n".utf8))
+        }
         // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
         // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
-        // menu-bar icon hidden, that is the way back to Settings.
-        if (!loginLaunch) || !controller.hasLibrary { openWindow() }
+        // menu-bar icon hidden, that is the way back to Settings. A hidden background launch never
+        // opens a window either, even before a library exists.
+        if !backgroundLaunch && ((!loginLaunch) || !controller.hasLibrary) { openWindow() }
         // A login launch starts the Studios only when the owner asked for it; the default is
         // off, so a Mac that signs in overnight stays idle until someone sends it work. Every
         // other launch starts them, because opening the app is the intent to use it.
@@ -1590,7 +1624,7 @@ struct StudioHubApplication {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
-        app.setActivationPolicy(.regular)
+        app.setActivationPolicy(isBackgroundLaunch() ? .accessory : .regular)
         withExtendedLifetime(delegate) { app.run() }
     }
 }

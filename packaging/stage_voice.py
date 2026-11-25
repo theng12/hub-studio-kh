@@ -17,6 +17,44 @@ import tempfile
 from typing import Literal
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# ── Sparkle (in-app updates) ────────────────────────────────────────────────
+# The shim (`libkhsparkle.a` + `khsparkle.h`) and Sparkle 2.10.1 framework are vendored under
+# `vendor/khsparkle/`, pinned by `_orchestra/tools/pinned/REQUIRED-SHIM.txt`. An app build without
+# all three pieces refuses rather than shipping an app that silently never updates
+# (INTEGRATION.md §3B, §1).
+HUB_BUNDLE_ID = 'local.studiohub.standalone'
+HUB_APPCAST_URL = 'https://theng12.github.io/hub-studio-kh/appcast.xml'
+HUB_HOLD_URL = 'http://127.0.0.1:47873/api/maintenance/hold'
+HUB_HOLD_TOKEN_FILE = '~/Library/KHUpdater/state/hold-token'
+SPARKLE_VENDOR = ROOT / 'vendor' / 'khsparkle'
+# Beside this file, not under ROOT: tests and fixtures point ROOT at a synthetic repo, and the
+# exemption is a property of the signing recipe, not of the tree being staged.
+SPARKLE_ENTITLEMENTS = Path(__file__).resolve().parent / 'hub-entitlements.plist'
+
+
+def sparkle_public_key(bundle_id: str = HUB_BUNDLE_ID) -> str:
+    """This app's EdDSA public half (base64), or a refusal naming both places it can come from.
+
+    The private half never enters this repo or this build: it stays at
+    `~/.kh-sparkle/<bundle-id>/private.key` (0600) and signs the appcast on this Mac
+    (INTEGRATION.md §4). `KH_SPARKLE_PUBLIC_KEY` exists so a smoke build can prove the plumbing
+    without a live key; a release passes neither and reads the real one.
+    """
+    value = os.environ.get('KH_SPARKLE_PUBLIC_KEY', '').strip()
+    if value:
+        return value
+    path = Path.home() / '.kh-sparkle' / bundle_id / 'public.key'
+    if path.is_file():
+        text = path.read_text(encoding='utf-8').strip()
+        if text:
+            return text
+    raise ValueError(
+        f'no Sparkle public key for {bundle_id}: set KH_SPARKLE_PUBLIC_KEY or put the public half '
+        f'at {path}. The private half stays on this Mac and never enters the build '
+        '(INTEGRATION.md §4).')
+
+
 RenderAuthorityMode = Literal['tool-only', 'descriptor-only', 'sealed-candidate']
 RENDER_AUTHORITY_MODES: tuple[RenderAuthorityMode, ...] = (
     'tool-only', 'descriptor-only', 'sealed-candidate')
@@ -440,6 +478,9 @@ def sign_app(app: Path, *, nested: bool = True) -> None:
     app = Path(app).resolve()
     identity = _signing_identity(app)
     items = _signable_items(app) if nested else []
+    # The app is the process that loads Sparkle.framework; the exemption goes on it alone.
+    exempt = (['--entitlements', str(SPARKLE_ENTITLEMENTS)]
+              if (app / 'Contents/Frameworks/Sparkle.framework').is_dir() else [])
     for item in [*items, app]:
         restore_modes = []
         if item.is_file() and _is_macho(item):
@@ -453,7 +494,8 @@ def sign_app(app: Path, *, nested: bool = True) -> None:
             for path, mode in restore_modes:
                 path.chmod(mode | stat.S_IWUSR)
             result = subprocess.run(
-                ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none', str(item)],
+                ['/usr/bin/codesign', '--force', '--sign', identity, '--timestamp=none',
+                 *(exempt if item == app else []), str(item)],
                 capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError(f'codesign failed for {item}: {result.stderr.strip()}')
@@ -1309,7 +1351,28 @@ def stage(runtime: Path, output: Path, native_shell: Path | None = None, *,
         native_executable = contents / 'MacOS/Hub Studio KH'
         shutil.copyfile(native_shell, native_executable)
         native_executable.chmod(0o755)
+        # Sparkle travels inside the app, at the path the build's
+        # `-rpath @executable_path/../Frameworks` resolves to. Copied before any signing so the
+        # inside-out walk seals it along with everything else; its versioned-bundle symlinks
+        # (`Versions/Current`, top-level `Sparkle`) are links, not copies.
+        for piece in ('libkhsparkle.a', 'khsparkle.h', 'Sparkle.framework'):
+            if not (SPARKLE_VENDOR / piece).exists():
+                raise ValueError(f'vendored Sparkle piece missing: {SPARKLE_VENDOR / piece}')
+        frameworks = contents / 'Frameworks'
+        frameworks.mkdir(exist_ok=True)
+        shutil.copytree(SPARKLE_VENDOR / 'Sparkle.framework', frameworks / 'Sparkle.framework',
+                        symlinks=True)
         plist.update({
+            # Sparkle compares CFBundleVersion to decide whether the appcast's item is newer;
+            # a constant here would make every release look already installed.
+            'CFBundleVersion': version,
+            'SUFeedURL': HUB_APPCAST_URL,
+            'SUPublicEDKey': sparkle_public_key(),
+            'SUEnableAutomaticChecks': True,
+            # The hold contract: Sparkle asks the running Hub to settle before it swaps the
+            # bundle, and the token is the same one the installer hold uses (CONTRACT.md).
+            'KHHoldURL': HUB_HOLD_URL,
+            'KHHoldTokenFile': HUB_HOLD_TOKEN_FILE,
             'CFBundleExecutable': 'Hub Studio KH',
             'CFBundleIdentifier': 'local.studiohub.standalone',
             # The app is "Hub Studio KH" everywhere an operator can see it: bundle filename,
