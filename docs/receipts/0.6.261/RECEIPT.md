@@ -27,8 +27,12 @@ feed readback: asset anonymous readback **PASS** — published as GitHub release
   feed lane's (RELEASE-POLICY §"One producer"); this release handed S001: version `0.6.261`, stored
   file `Hub.Studio.KH-0.6.261.dmg`, sha256 `6cc3baa8…60af`, bytes `1483807744`. The row's tagline is
   the tag's own (`app-meta.json` at `0.6.261`: "Runs AI models on this Mac for your other apps."),
-  which wins over any registry text; the lead's suggested sentence is not used for the row. The
-  served-row readback follows and is not in this receipt.
+  which wins over any registry text; the lead's suggested sentence is not used for the row.
+feed served: **PASS** — `published_at 2026-11-25T15:06:49.188Z`, 28,671 feed bytes, served `hub` row
+  `0.6.261` / sha256 `6cc3baa8…60af` / 1,483,807,744 B / tagline "Runs AI models on this Mac for your
+  other apps.", verified by M001 with `feed-verify.sh --expect-version 0.6.261 --expect-sha
+  6cc3baa8…60af` → `PASS signature` (Ed25519 against the pinned feed key). S001 reported the same
+  `published_at` and an envelope sha256 `3303a8a6…9a07`; `printer-studio 1.0.46` moved in the same pass.
 page state: same — Pages serves `appcast.xml` with one item: `shortVersionString` `0.6.261`,
   `length="1483807744"`, enclosure URL exactly the asset URL above, `edSignature`
   `MXqjYaIQGlngGSsJY5I/Jjh8H6GcgFPJfm4N0Bmw+5nEJhAHczuwVfPZLwJEcBJogpZIab7P7+ZZmJUQCIyAAA==`.
@@ -43,14 +47,15 @@ idle footprint: **126 MB after 600 s, +1 MB while idle**, ceiling 500 MB — the
   `step idle-footprint :: UNMEASURED (set IDLE_PID in the gate config to measure it)`, which is
   `gate-run.sh` reporting that the config names no `IDLE_PID` — a known defect, row `20261125-16`.
   The 126 MB line is the config's own step and is the number this receipt carries.
-retired: none — 0 bytes. The release worktree, its 8.5 GB of DMG staging (row `20261125-49`) and the
-  candidate DMG stay until the feed readback; the Developer retires the worktree with a manifest under
-  `$HOME/Desktop/_trash/hub-studio-kh/`. `make_dmg.py` no longer preserves staging (0.6.262,
-  `af123191`), so the next gate will not add to it.
+retired: `Hub Studio KH-0.6.259.dmg` — 1,483,071,488 B, sha `7b154210…6e5c` — moved to
+  `$HOME/Desktop/_trash/hub-studio-kh/2026-11-25 0.6.259 installer/` with a `MANIFEST.md`; size and sha
+  re-verified equal after the move. `dist/` keeps current + previous: **0.6.261 + 0.6.260**. The release
+  worktree and its 8.5 GB of DMG staging (row `20261125-49`) retire after this receipt; `make_dmg.py`
+  no longer preserves staging (0.6.262, `af123191`), so the next gate will not add to it.
 not proven: (1) **replace-and-relaunch unproven** — it lands with the first real served update; what
-  was proved on this build is hold → found → download → safe abort → resume; (2) the served feed row
-  for this version (the feed lane's producer pass, handed to S001 — not this lead's); (3) an installed
-  0.6.261 on the shipped machine (the Launcher's automatic install follows the feed row);
+  was proved on this build is hold → found → download → safe abort → resume; (2) an installed
+  0.6.261 on the shipped machine (the Launcher's automatic install follows the feed row, and the row
+  is served now);
   (4) whole-fleet and long-run idle-footprint states — only idle-after-one-cycle was measured;
   (5) a real `declared → measured` upgrade of a model's RAM figure from a refusal or a load — the
   mechanism and its history are unit-tested, no real refusal or load has occurred since.
