@@ -19,12 +19,13 @@ cd "$(dirname "$0")/.."
 
 fail() { printf 'Stopped: %s\n' "$1" >&2; exit 1; }
 
-dmg="${1:?usage: packaging/appcast.sh <dist-dmg> [published-asset-url]}"
+dmg="${1:?usage: packaging/appcast.sh <dist-dmg> [published-asset-url] [appcast-path]}"
 [ -f "$dmg" ] || fail "no DMG at $dmg"
 app="Hub Studio KH"
 sign="vendor/khsparkle/sign_update"
 private_key="${HUB_SPARKLE_PRIVATE:-$HOME/.kh-sparkle/local.studiohub.standalone/private.key}"
-appcast="docs/appcast.xml"
+# The gate writes the item somewhere throwaway so a rejected artifact leaves the feed untouched.
+appcast="${3:-docs/appcast.xml}"
 
 [ -x "$sign" ] || fail "the vendored sign_update is missing at $sign"
 [ -f "$private_key" ] || fail "no Sparkle private key at $private_key - set HUB_SPARKLE_PRIVATE"
@@ -54,7 +55,7 @@ signature="$("$sign" --ed-key-file "$private_key" -p "$dmg")" \
   || fail "sign_update refused $private_key: $signature"
 [[ "$signature" =~ ^[A-Za-z0-9+/]{86}==$ ]] || fail "sign_update printed no signature: $signature"
 
-mkdir -p docs
+mkdir -p "$(dirname "$appcast")"
 [ -f "$appcast" ] || cat > "$appcast" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
