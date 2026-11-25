@@ -117,9 +117,10 @@ def build(app: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists() or output.is_symlink():
         print('Previous installer preserved:', preserve(output, ROOT, 'dist'))
-    scratch_parent = ROOT / '.build'
-    scratch_parent.mkdir(exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix='dmg-stage-', dir=scratch_parent))
+    # The staging copy is one build's own bytes: nothing reads it afterwards, and preserving it put
+    # 8.5 GB inside the checkout's `_trash` on every gate (issue row 20261125-49). It goes to the
+    # system temp folder, which a reboot clears, and a finished build removes it.
+    scratch = Path(tempfile.mkdtemp(prefix='hub-dmg-stage-'))
     complete = False
     try:
         # The bundle keeps the name it was staged with ("Hub Studio KH.app").
@@ -135,7 +136,12 @@ def build(app: Path, output: Path) -> None:
         subprocess.run(['hdiutil', 'verify', str(output)], check=True)
         complete = True
     finally:
-        print('DMG staging preserved:', preserve(scratch, ROOT, 'dmg-scratch'))
+        if complete:
+            shutil.rmtree(scratch, ignore_errors=True)
+        else:
+            # A failed build keeps its staging copy where it is, under the system temp folder, so it
+            # can be read now and disappears at reboot. It is never moved into the checkout.
+            print('DMG staging kept for this run:', scratch)
         if not complete and output.exists():
             print('Incomplete installer preserved:', preserve(output, ROOT, 'dist'))
     print('Installer:', output)

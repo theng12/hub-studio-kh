@@ -1,6 +1,7 @@
 """The app release archive is preserved on replacement and failed staging."""
 import importlib.util
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -74,6 +75,44 @@ class RecoverableDmgFiles(unittest.TestCase):
                 if fail:
                     self.assertFalse(output.exists())
                     self.assertIn(b'new candidate', archived)
+
+    def test_a_finished_build_leaves_nothing_staged_in_the_checkout(self):
+        """Issue row 20261125-49: a green gate left 8.5 GB of DMG staging in the checkout's `_trash`.
+
+        A finished build stages under the system temp folder, removes that copy, and files nothing
+        in a checkout trash unless it is keeping a replaced artifact.
+        """
+        with tempfile.TemporaryDirectory(prefix='dmg-no-scratch-') as name:
+            root = Path(name)
+            app = root / 'Hub Studio KH.app'
+            (app / 'Contents').mkdir(parents=True)
+            (app / 'Contents/Info.plist').write_text('fixture')
+            (root / 'file-manifest').mkdir()
+            spec = importlib.util.spec_from_file_location('safe_dmg_scratch', ROOT / 'packaging/make_dmg.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            output = root / 'dist/.candidates/Hub Studio KH-0.6.262.dmg'
+            staged = []
+
+            def run(command, **kwargs):
+                if command[:3] == ['diskutil', 'image', 'create']:
+                    staged.append(Path(command[-2]).resolve())
+                    output.write_bytes(b'new candidate')
+                return subprocess.CompletedProcess(command, 0)
+
+            self.addCleanup(lambda: [shutil.rmtree(p, ignore_errors=True) for p in staged])
+            with mock.patch.object(module, 'ROOT', root), \
+                    mock.patch.object(module, 'validate_stage'), \
+                    mock.patch.object(module.subprocess, 'run', side_effect=run):
+                module.build(app, output)
+
+            self.assertEqual(output.read_bytes(), b'new candidate')
+            self.assertEqual(len(staged), 1)
+            self.assertIn(Path(tempfile.gettempdir()).resolve(), staged[0].parents,
+                          'the build staged outside the system temp folder')
+            self.assertFalse(staged[0].exists(), 'a finished build kept its staging copy')
+            self.assertFalse((root / '_trash').exists(),
+                             'a finished build filed something in a checkout trash')
 
     def test_changed_staged_content_is_rejected_before_packaging(self):
         with tempfile.TemporaryDirectory(prefix='dmg-integrity-private-') as name:
