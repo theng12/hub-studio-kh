@@ -744,7 +744,8 @@ class StagingTests(unittest.TestCase):
                     mock.patch.dict(sys.modules, {'stage_render_tools': stage_render_tools}), \
                     mock.patch.object(stage_render_tools, 'production_pins',
                                       lambda _directory: tuple(pins)), \
-                    mock.patch.dict(os.environ, {'KH_SPARKLE_PUBLIC_KEY': 'A' * 43 + '='}):
+                    mock.patch.object(module, 'sparkle_public_key',
+                                      lambda: 'A' * 43 + '='):
                 try:
                     # The fixture runtime is synthetic, so it is not the tree the models were
                     # qualified on and `stage_voice` refuses it by design. The override is the

@@ -14,6 +14,12 @@ app="${1:?usage: hidden-launch.sh <app-bundle> [seconds]}"
 seconds="${2:-6}"
 exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
 [ -x "$exe" ] || { echo "Stopped: no executable at $exe" >&2; exit 1; }
+# A proof that can pass on a fixture key is not a proof of the shipped app: refuse unless the
+# bundle carries this app's own EdDSA public half.
+key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist" 2>/dev/null || true)"
+[ "${#key}" -eq 44 ] || { echo "Stopped: SUPublicEDKey is missing or not 44 base64 chars (got '${key}')" >&2; exit 1; }
+real="$(cat "$HOME/.kh-sparkle/local.studiohub.standalone/public.key" 2>/dev/null || true)"
+[ "$key" = "$real" ] || { echo "Stopped: SUPublicEDKey is not Hub's own public key" >&2; exit 1; }
 
 probe="${TMPDIR:-/tmp}/kh-window-count"
 xcrun swiftc -O "$ROOT_DIR/tests/native/window_count.swift" -o "$probe"

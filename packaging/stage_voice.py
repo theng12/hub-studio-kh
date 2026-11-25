@@ -34,25 +34,21 @@ SPARKLE_ENTITLEMENTS = Path(__file__).resolve().parent / 'hub-entitlements.plist
 
 
 def sparkle_public_key(bundle_id: str = HUB_BUNDLE_ID) -> str:
-    """This app's EdDSA public half (base64), or a refusal naming both places it can come from.
+    """This app's own EdDSA public half (44 base64 chars), read from this Mac.
 
-    The private half never enters this repo or this build: it stays at
-    `~/.kh-sparkle/<bundle-id>/private.key` (0600) and signs the appcast on this Mac
-    (INTEGRATION.md §4). `KH_SPARKLE_PUBLIC_KEY` exists so a smoke build can prove the plumbing
-    without a live key; a release passes neither and reads the real one.
+    The pair is Hub's alone: it stays at `~/.kh-sparkle/<bundle-id>/` (private.key 0600, never in
+    this repo, this build, a log or a receipt) and signs the appcast here (INTEGRATION.md §4).
+    There is no override and no default: a build with a guessed or borrowed key would publish
+    items nobody's app can verify, and every Mac would silently stop updating.
     """
-    value = os.environ.get('KH_SPARKLE_PUBLIC_KEY', '').strip()
-    if value:
-        return value
     path = Path.home() / '.kh-sparkle' / bundle_id / 'public.key'
-    if path.is_file():
-        text = path.read_text(encoding='utf-8').strip()
-        if text:
-            return text
-    raise ValueError(
-        f'no Sparkle public key for {bundle_id}: set KH_SPARKLE_PUBLIC_KEY or put the public half '
-        f'at {path}. The private half stays on this Mac and never enters the build '
-        '(INTEGRATION.md §4).')
+    text = path.read_text(encoding='utf-8').strip() if path.is_file() else ''
+    if len(text) != 44:
+        raise ValueError(
+            f'no Sparkle public key for {bundle_id}: expected 44 base64 chars at {path}, found '
+            f'{len(text)}. Generate the pair with `kh-sparkle-key.swift gen {bundle_id}`; the '
+            'private half stays on this Mac (INTEGRATION.md §4).')
+    return text
 
 
 RenderAuthorityMode = Literal['tool-only', 'descriptor-only', 'sealed-candidate']

@@ -1351,19 +1351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             print("QUIT_ATTENDED isActive=\(NSApp.isActive) windowVisible=\(window?.isVisible ?? false) login=\(loginLaunch) autoTermination=\(ProcessInfo.processInfo.automaticTerminationSupportEnabled)")
             exit(0)
         }
-        // Start the Sparkle shim once, after the menu-bar item exists (INTEGRATION.md §2). It
-        // reads SUFeedURL, SUPublicEDKey, KHHoldURL and KHHoldTokenFile from Info.plist, takes
-        // the Hub's maintenance hold before any feed fetch or download, and draws no UI. A refusal
-        // is logged plainly here — never a dialog and never an unheld swap.
         kh_sparkle_set_state_callback(khSparkleStateChanged)
-        if kh_sparkle_start() != 0 {
-            let reason = String(cString: kh_sparkle_last_error())
-            updaterLog.notice("kh-sparkle refused: \(reason, privacy: .public)")
-            FileHandle.standardError.write(Data("kh-sparkle: refused: \(reason)\n".utf8))
-        } else {
-            updaterLog.notice("kh-sparkle started")
-            FileHandle.standardError.write(Data("kh-sparkle: started\n".utf8))
-        }
         // A Lite Mode Mac opens its window only by hand: an update's reopen must not put Hub Studio KH in
         // front of a cashier. Opening the app from Applications or Spotlight still shows it - with the
         // menu-bar icon hidden, that is the way back to Settings. A hidden background launch never
@@ -1382,6 +1370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                   canConfigure: controller.canConfigure) {
         case .start:
             controller.start()
+            startUpdaterAfterLocalServices(controller)
         case .stayStopped(let reason):
             // Say why the Studios are not up, so a Mac that looks idle is not mistaken for one
             // that failed. A person opening the app still starts them (the launch is not a login
@@ -1389,7 +1378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // a second copy of the app that is about to exit.
             controller.noteLaunchDeclined(reason)
         case .nothingToStart:
-            break
+            startUpdaterAfterLocalServices(controller)
         }
         // Opened by hand or by an update's reopen: refresh the existing launchd registration so it
         // can restore the app after an abnormal exit; a clean Quit remains stopped. Only the
@@ -1415,6 +1404,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Data("Hub Studio KH login supervision: \(outcome.sanitizedDescription)\n".utf8))
         }
     }
+    /// Starts the Sparkle shim **once this Hub is answering**, never before (INTEGRATION.md §2).
+    ///
+    /// Cold start is the case that matters: `kh_sparkle_start` takes the update hold immediately,
+    /// so starting it at launch means asking a Hub that is not listening yet — the hold is refused,
+    /// and the shim refuses the update with it, every single launch. This waits for the app's own
+    /// `readyURL` (written by the worker, read by the controller) and gives up after two minutes —
+    /// the same ceiling the start ladder uses — with a plain reason, because a Hub that never came
+    /// up has nothing to hold.
+    /// The controller's start ladder already retries a failed start; this only ever runs once,
+    /// after the app is answering, so a Hub that later recovers is not asked twice.
+    private func startUpdaterAfterLocalServices(_ controller: StudioController) {
+        Task { @MainActor [weak controller] in
+            let deadline = Date().addingTimeInterval(120)
+            while let controller, controller.readyURL == nil, Date() < deadline {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard let controller, controller.readyURL != nil else {
+                return say("refused: the local services never became ready")
+            }
+            // The shim reads SUFeedURL, SUPublicEDKey, KHHoldURL and KHHoldTokenFile from
+            // Info.plist, holds this Hub's work before any feed fetch or download, and draws
+            // nothing. A refusal is a log line, never a dialog and never an unheld swap.
+            if kh_sparkle_start() != 0 {
+                say("refused: " + String(cString: kh_sparkle_last_error()))
+            } else {
+                say("started")
+            }
+        }
+    }
+    private func say(_ line: String) {
+        updaterLog.notice("kh-sparkle \(line, privacy: .public)")
+        FileHandle.standardError.write(Data("kh-sparkle: \(line)\n".utf8))
+    }
+
     /// The heartbeat that dates a kill nothing can record, and the stamp of critical memory pressure
     /// that tells a low-memory stop from a plain Force Quit. See `StopRecord`.
     private var heartbeat: DispatchSourceTimer?
