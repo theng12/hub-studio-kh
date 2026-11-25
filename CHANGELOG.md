@@ -2,6 +2,18 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.260 — 2026-11-25
+
+- **Every model now states how much RAM it needs before you install it.** The catalogue publishes a real memory figure for every model Hub offers so other Studio apps can show the requirement ahead of time and name the shortfall instead of learning it from a failure.
+- **Models that do not fit a Mac are still listed.** A model too large for your Mac stays visible with its memory requirement and shortfall rather than disappearing from the list, and when a real run measures a truer figure the catalogue updates to match while keeping the previous number.
+
+### Technical notes
+- `components/hub/backend/model_needs.py` — computes `(needs_gb, needs_source)` for every model, with zero `unknown` entries across all 41 active shipped manifests. `declared` derives from shipped weight bytes plus a constant per-engine runtime overhead (`embed-mlx` / `voice-vits` 0.5 GB; `subtitle-mlx` / `vision-mlx` / `voice-mlx` 1.0 GB; `chat-mlx` / `image-mflux` 2.0 GB; `music-yue2` 2.5 GB; `image-mlx-serve` / `music-mlx` 3.0 GB). `measured` upgrades from worker refusals (`note_refusal`), real loads (`note_load`), manifest `qualification.min_free_memory_gb`, or worker-published free-memory floors, persisting learned values in `model-needs.json` with a bounded `history` preserving replaced figures.
+- `components/hub/standalone.py`, `components/hub/backend/model_ids.py`, `components/hub/backend/model_install_plan.py` — publish `needs_gb` and `needs_source` on every model row across `/api/hub/model-packages`, `/api/hub/model-presets`, `/api/hub/catalog`, and `/api/hub/models` without omitting models that exceed a Mac's memory.
+- `components/hub/backend/broker.py` — records worker memory refusals through `model_needs.note_refusal` on capacity failures so declared and learned figures converge.
+- Tests: `tests/test_model_needs.py` (6) — every active manifest and route entry carries positive `needs_gb` and non-`unknown` `needs_source`, a model that fits nowhere still appears with its `needs_gb` and shortfall, per-engine overhead is constant, and `measured` upgrades preserve prior figures in history.
+
+
 ## 0.6.259 — 2026-11-24
 
 - **Starting several model downloads no longer fails the ones that come after.** The first one runs; anything you start while it runs waits in line and begins by itself, so a 32 GB download and the next click both finish without you going back to them. A refused click is no longer listed under "Finished today" — waiting is not a failure.
@@ -113,17 +125,3 @@ Plain-language changes appear first in each release and feed the app’s What’
 - `packaging/hub-service-lifecycle.sh` (stop/start/verify) and its selftest own a temp launchd label only; observed states: `state = SIGTERMed` → `Could not find service` after bootout; `state = running`, pid matching the health reply after bootstrap; a failed bootstrap (`exit=5 Input/output error`) reports "no service loaded" with the restore instruction and recovers with the original plist. `spawn failed` / `needs LWCR update` are reported verbatim if they occur and did not occur on the temp label.
 - `LoginMigration.recordsCompletion(_:)` ends the migration only on success; a caught failure stays unrecorded so the next launch inspects and tries once more (one check, one attempt, nothing on the startup path). Tested both branches in `tests/native/lifecycle_main.swift`.
 - Signing: this is the first Hub release under the adopted identity. The two-build `designated =>` comparison and the artifact certificate (read from the mounted DMG) are recorded in the release receipt; no trust setting is added, moved or removed by the build, gate or lifecycle scripts.
-
-## 0.6.250 — 2026-11-19
-
-- **A Mac goes free when its job is done.** A job that had finished could still hold on to the Mac it ran on, so other work waited on a machine that was actually idle. A lease now follows its job: when the job ends, the lease goes with it, and a restarted Hub drops any lease it cannot point at unfinished work.
-- **A job with no answer now ends, and says why.** One job waited more than sixteen hours marked "uncertain" with nothing re-driving it. Every uncertain job now ends inside its own limit — failed, with the reason and the option to retry — and if the late answer still turns up it is kept beside the verdict rather than thrown away.
-- **A Mac that cannot take work says so on its row.** When the Hub refuses a job because a Mac lacks the memory, the sentence it recorded is shown on that Mac's row with how long ago it was said, and it disappears once the Mac takes work again.
-- **The installer's stop never asks a question.** The app used to ask "Quit and stop its engine?" based on whether someone appeared to be watching, which meant a screen-shared Mac stopped for a person while an untouched one sailed through. It now asks only when a person asked to quit: a stop that follows the installer's hold goes straight to holding, settling and quitting.
-
-### Technical notes
-- Leases: `broker.prune_stale_machine_leases()` at startup (`restore_batches`) and on the 60 s sweep drops a lease whose owning chat/transcription/developer-test row is absent, terminal or unnamed; a render/peer/relay lease that no local row can disprove is still bounded by `automatic_recovery.MAX_STALL_S` (the existing 6 h ceiling). An idle peer's `machine_lease_busy` refusal reads "peer says lease-busy while reporting 0 running" in `governor_note` and the item error instead of passing the bare 409 up (`peers.reports_zero_running()` reads the existing fresh snapshot only).
-- Uncertain: `expire_uncertain_items()` runs on the same sweep and fails an item retryable with `UNCERTAIN_BOUND_EXCEEDED` once its own bound passes — Image 3600 s and Voice 7200 s from `automatic_recovery`, raised by a worker's `deadline_s`, else the existing 21600 s ceiling. A late answer is recorded as `late_result` beside the unchanged verdict.
-- Refusals: `broker.note_refusal()` stores `{code, message, at}` in the per-machine protection state at both `INSUFFICIENT_MEMORY` hand-back points, cleared by `_mark_machine_success()`; `fleet_overview()` copies it onto the row as `refusal {code,message,age_s}` and the native row shows it as a caption only while that Mac has no current job.
-- Quit: `QuitDecision.shouldChallengeQuit(source:busy:attended:)` — a person's or unknown quit while busy and attended may still be challenged; an installer-sourced stop never is. The source is `/api/health`'s `update_hold_active`, set only by a `POST /api/maintenance/hold` authenticated with the installer's 0600 hold token (`auth.installer_hold_request`) and self-expiring after `dispatch_paused_s`.
-- Tests: `tests/test_terminal_lifecycle_0250.py` (7), `tests/test_fleet_refusal_reason_0250.py` (3), `tests/native/lifecycle_main.swift` (the updater-stop case fails without this change — exit 133 on the old attendance gate).

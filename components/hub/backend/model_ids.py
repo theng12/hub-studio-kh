@@ -96,11 +96,12 @@ def canonical(value: object, index: dict[str, str] | None = None) -> str:
 
 
 def annotate(payload: dict) -> dict:
-    """Return a catalogue payload with ``model_id`` on every model row."""
+    """Return a catalogue payload with ``model_id``, ``needs_gb`` and ``needs_source`` on every model row."""
     rows = payload.get("models") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return payload
-    index = load_index()
+    from . import model_needs
+    index, manifests = _load()
     annotated: list = []
     for row in rows:
         if not isinstance(row, dict):
@@ -108,10 +109,14 @@ def annotate(payload: dict) -> dict:
             continue
         name = row.get("repo") or row.get("model_id")
         if not isinstance(name, str) or not name.strip():
-            annotated.append(dict(row))
+            needs_gb, needs_source = model_needs.needs_for_row(row, None)
+            annotated.append({**row, "needs_gb": needs_gb, "needs_source": needs_source})
             continue
         # model_id: the manifest's stable identifier, so /api/hub/models and
         # /api/hub/jobs can be joined on one string.  The worker's own repo key
         # is preserved unchanged.
-        annotated.append({**row, "model_id": canonical(name, index)})
+        canon = canonical(name, index)
+        needs_gb, needs_source = model_needs.needs_for_row(row, manifests.get(canon))
+        annotated.append({**row, "model_id": canon,
+                          "needs_gb": needs_gb, "needs_source": needs_source})
     return {**payload, "models": annotated}

@@ -186,12 +186,14 @@ def _installed(receipts: dict[str, dict], package_id: str) -> bool:
 def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_gb: float | None,
                modality_of, presets: list[dict] | None = None,
                lan_source: dict[str, str] | None = None,
-               ssd_source: dict[str, str] | None = None) -> list[dict]:
+               ssd_source: dict[str, str] | None = None,
+               free_floors: dict[str, float] | None = None) -> list[dict]:
     """One row per package: what it is, what it costs, whether it is here, and how it would arrive.
 
     A dependency (a tokenizer, a codec) is **not** a row: nobody chooses it, and it arrives with the
     package that needs it, which is why a preset never lists one either.
     """
+    from . import model_needs
     companions = dependency_ids(manifests, presets)
     rows: list[dict] = []
     for package_id in sorted(manifests):
@@ -199,6 +201,8 @@ def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_
         if manifest.get("_manifest_error") or package_id in companions:
             continue
         engine = str(manifest.get("engine") or "")
+        needs_gb, needs_source = model_needs.needs_for(
+            manifest, model_needs.published_floor_for(manifest, free_floors))
         rows.append({
             "package_id": package_id,
             "model_id": manifest.get("model_id"),
@@ -209,6 +213,8 @@ def model_rows(*, manifests: dict[str, dict], receipts: dict[str, dict], memory_
             "quantization": manifest.get("quantization"),
             "bytes": library_bytes(manifest),
             "floor_gb": model_presets.floor_gb(package_id, manifest),
+            "needs_gb": needs_gb,
+            "needs_source": needs_source,
             "installed": _installed(receipts, package_id),
             "state": (receipts.get(package_id) or {}).get("state") or "not_installed",
             "reason": _refusal(package_id, manifest, memory_gb),
@@ -347,7 +353,8 @@ def preset_rows(*, presets: list[dict], rows: dict[str, dict], manifests: dict[s
 def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
              library: Path, memory_gb: float | None, stop_bytes: int, modality_of,
              lan_source: dict[str, str] | None = None,
-             volumes_root: Path | None = None) -> dict:
+             volumes_root: Path | None = None,
+             free_floors: dict[str, float] | None = None) -> dict:
     """The whole screen: this Mac, four presets, and every model grouped by its job.
 
     One read, computed fresh: a cached projection is a number the screen shows that a model
@@ -361,7 +368,7 @@ def snapshot(*, manifests: dict[str, dict], receipts: dict[str, dict],
     shipped = model_presets.load()
     rows = model_rows(manifests=manifests, receipts=receipts, memory_gb=memory_gb,
                       modality_of=modality_of, presets=shipped, lan_source=lan_source,
-                      ssd_source=kit_drives.ssd_sources(drives))
+                      ssd_source=kit_drives.ssd_sources(drives), free_floors=free_floors)
     by_id = {row["package_id"]: row for row in rows}
     presets = preset_rows(presets=shipped, rows=by_id, manifests=manifests,
                           memory_gb=memory_gb, disk_state=disk_state, stop_bytes=stop_bytes, queued_packages=_queued_packages())

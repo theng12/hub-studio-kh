@@ -43,6 +43,7 @@ from .resources import host_stats
 from . import stall
 from . import update_drain
 from . import memory_admission
+from . import model_needs
 from . import preferred_hold
 from . import developer_test_admission
 from .. import workstation
@@ -7679,6 +7680,11 @@ async def _run_item(client: httpx.AsyncClient, b: dict, item: dict, studio: dict
             # is still unbounded.
             failures = int(item.get("capacity_failures") or 0) + 1
             item["capacity_failures"] = failures
+            # The worker just stated the figure it needs for this model. Record it, so the
+            # catalogue's `needs_gb` converges on what the fleet really measured instead of staying
+            # the declared bytes-plus-overhead estimate (`model_needs.note_refusal` writes only when
+            # the figure changes, and never raises into this path).
+            model_needs.note_refusal(b.get("model"), message)
             if failures >= CAPACITY_HANDBACK_AFTER:
                 # Hand it back, typed: not retryable on this Mac, and not this Mac's failure either
                 # (no machine penalty) - the Gateway re-routes it to another eligible Mac.

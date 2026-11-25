@@ -250,6 +250,7 @@ def _manifest_error_row(manifest: dict[str, Any], reason: str, *,
     response's decoding and blank the pickers a second way.
     """
     from components import model_packages
+    from .backend import model_needs
 
     package_id = str(manifest.get("package_id") or "unknown")
     allowed = model_packages.production_allowed(manifest)
@@ -260,6 +261,12 @@ def _manifest_error_row(manifest: dict[str, Any], reason: str, *,
         "package_id": package_id,
         "model_id": str(manifest.get("model_id") or package_id),
         "engine": manifest.get("engine"),
+        "needs_gb": model_needs.declared_gb(manifest),
+        # An unusable manifest still carries a number - the engine's constant overhead alone when
+        # its file sizes cannot be read - because a catalogue entry with no RAM figure is the one
+        # thing the published contract forbids. The row is `invalid` and says why, so no caller
+        # offers it for install on the strength of this figure.
+        "needs_source": "declared",
         # Present whenever the engine is registered, even on a row whose manifest is unusable:
         # a scheduler reading the row must not need a second join to learn the lane.
         "modality": _row_modality(manifest),
@@ -391,7 +398,8 @@ def _modality_for_engine(engine: str) -> str:
 
 def _model_row(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
                monitor: StudioMonitor,
-               lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+               lane_contracts: dict[str, dict[str, Any]] | None = None,
+               free_floors: dict[str, float] | None = None) -> dict[str, Any]:
     """One `/api/hub/model-packages` row, isolated from every other row.
 
     A manifest that cannot be used gets its own row carrying the reason instead of an exception
@@ -406,7 +414,7 @@ def _model_row(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
             hint=("Fix or remove that file in the Hub's model-manifests folder, "
                   "then reload."))
     try:
-        return _model_state(manifest, catalog, monitor, lane_contracts)
+        return _model_state(manifest, catalog, monitor, lane_contracts, free_floors)
     except Exception as exc:  # noqa: BLE001 - one package must never blank the catalog
         logging.getLogger("studiohub.models").exception(
             "model package %r could not be described",
@@ -415,25 +423,22 @@ def _model_row(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
             manifest, f"The Hub could not describe this package: {exc}")
 
 
-def _lane_contracts(monitor: StudioMonitor) -> dict[str, dict[str, Any]]:
-    """Last-known ``lane_contract`` per model identifier, from the studios' own catalogs.
+def _worker_catalog_rows(monitor: StudioMonitor) -> list[tuple[str, dict[str, Any]]]:
+    """Every ``(model identifier, catalog row)`` pair the studios' last-good catalogs publish.
 
-    The studio is the only thing that knows its own API, so the Hub carries the contract the
-    worker published and never invents one. A studio that is not currently up contributes
-    nothing - a contract from a worker that is down describes a build that is not running - and
-    any failure here yields an empty map: this join must never be able to fail a package row.
+    The studio is the only thing that knows its own API and its own measurements, so the Hub
+    carries what the worker published and never invents it. A studio that is not currently up
+    contributes nothing - a row from a worker that is down describes a build that is not running -
+    and any failure here yields no pairs: these joins must never be able to fail a package row.
     That is the 0.6.57 lesson, where one row's failure blanked every picker on every Mac.
     """
-    contracts: dict[str, dict[str, Any]] = {}
+    pairs: list[tuple[str, dict[str, Any]]] = []
     try:
         rows = monitor.cached_aggregate_catalog().get("models") or []
-    except Exception:  # noqa: BLE001 - a missing contract is not a failed package row
-        return contracts
+    except Exception:  # noqa: BLE001 - a missing row is not a failed package row
+        return pairs
     for row in rows:
         if not isinstance(row, dict):
-            continue
-        contract = row.get("lane_contract")
-        if not isinstance(contract, dict):
             continue
         studio_id = row.get("hub_studio")
         if studio_id and monitor.status.get(studio_id, {}).get("status") != "up":
@@ -442,8 +447,39 @@ def _lane_contracts(monitor: StudioMonitor) -> dict[str, dict[str, Any]]:
                            *(row.get("aliases") or [])):
             key = str(identifier or "").strip()
             if key:
-                contracts.setdefault(key, contract)
+                pairs.append((key, row))
+    return pairs
+
+
+def _lane_contracts(monitor: StudioMonitor) -> dict[str, dict[str, Any]]:
+    """Last-known ``lane_contract`` per model identifier, from the studios' own catalogs."""
+    contracts: dict[str, dict[str, Any]] = {}
+    for key, row in _worker_catalog_rows(monitor):
+        contract = row.get("lane_contract")
+        if isinstance(contract, dict):
+            contracts.setdefault(key, contract)
     return contracts
+
+
+def _published_free_floors(monitor: StudioMonitor) -> dict[str, float]:
+    """The live-free floor a worker measured for its model, per identifier (``min_free_memory_gb``
+    or ``required_free_memory_gb`` on its own row, read through `workload_policy`).
+
+    AGENTS.md requires that floor to come from a clean run and never a formula, so it is a real
+    measurement - which is why `model_needs` publishes it as ``measured`` rather than deriving one.
+    A row whose floor cannot be read contributes nothing; it never fails the catalogue.
+    """
+    from .backend import workload_policy
+    floors: dict[str, float] = {}
+    for key, row in _worker_catalog_rows(monitor):
+        model = str(row.get("model_id") or row.get("repo") or "")
+        try:
+            floor = workload_policy.required_free_memory_gb(model, row)
+        except ValueError:
+            floor = None
+        if floor is not None:
+            floors.setdefault(key, floor)
+    return floors
 
 
 def _contract_for(manifest: dict[str, Any],
@@ -821,14 +857,23 @@ def retire_installed_models() -> list[str]:
 
 def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
                  monitor: StudioMonitor,
-                 lane_contracts: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+                 lane_contracts: dict[str, dict[str, Any]] | None = None,
+                 free_floors: dict[str, float] | None = None) -> dict[str, Any]:
     from components import model_packages
+    from .backend import model_needs
     receipt = model_packages.preflight(manifest, _model_library(), catalog=catalog)
     worker_id = _worker_for_engine(manifest["engine"])
     worker = next((item for item in monitor.registry if item["id"] == worker_id), None)
     if lane_contracts is None:
         lane_contracts = _lane_contracts(monitor)
     contract = _contract_for(manifest, lane_contracts)
+    if free_floors is None:
+        free_floors = _published_free_floors(monitor)
+    # What this model needs to run, published before an install so a caller never has to learn it
+    # from a refusal (owner rule: RAM is the only limit, show it first). Read through `model_needs`,
+    # which states its source and always answers with a number.
+    published_floor = model_needs.published_floor_for(manifest, free_floors)
+    needs_gb, needs_source = model_needs.needs_for(manifest, published_floor)
     if contract is not None:
         # Added here rather than restated by five workers, and derived from the **generator**:
         # a subtitle job is not given a video job's ceiling, because the owner's question was
@@ -851,6 +896,11 @@ def _model_state(manifest: dict[str, Any], catalog: dict[str, dict[str, Any]],
         "model_id": manifest["model_id"],
         "revision": manifest["revision"],
         "engine": manifest["engine"],
+        # How much RAM this model needs, and which kind of statement the number is (`declared` from
+        # its own bytes plus the engine's constant overhead, or `measured` from a floor a worker
+        # published or a refusal this Hub learned from). Read before an install; never `unknown`.
+        "needs_gb": needs_gb,
+        "needs_source": needs_source,
         # The modality a job for this package must declare. Read from the same engine table the
         # worker comes from (no second mapping), so a scheduler does not have to make a second,
         # best-effort catalog read and join on model id - which is what silently dropped a model
@@ -2409,10 +2459,11 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
         # One pass over the studios' last-good catalogs for the whole route: the `lane_contract`
-        # join is per model but its source is shared, and a worker that is down simply leaves the
-        # key null on its rows.
+        # and measured free-floor joins are per model but their source is shared, and a worker
+        # that is down simply leaves the key null on its rows.
         contracts = _lane_contracts(monitor)
-        return {"models": [_model_row(manifest, catalog, monitor, contracts)
+        free_floors = _published_free_floors(monitor)
+        return {"models": [_model_row(manifest, catalog, monitor, contracts, free_floors)
                            for manifest in catalog.values()]}
 
     @app.get("/api/hub/model-presets")
@@ -2461,7 +2512,8 @@ def create_app(*, start_background: bool = True) -> FastAPI:
         return model_install_plan.snapshot(
             manifests=catalog, receipts=receipts, library=library, memory_gb=memory_gb,
             stop_bytes=disk_governor.STOP_BYTES, modality_of=_modality_for_engine,
-            lan_source=_lan_sources(catalog, library, monitor))
+            lan_source=_lan_sources(catalog, library, monitor),
+            free_floors=_published_free_floors(monitor))
 
     @app.get("/api/hub/catalog")
     @app.get("/api/hub/models")
