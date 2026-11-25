@@ -110,6 +110,8 @@ class RecoverableDmgFiles(unittest.TestCase):
             self.assertEqual(len(staged), 1)
             self.assertIn(Path(tempfile.gettempdir()).resolve(), staged[0].parents,
                           'the build staged outside the system temp folder')
+            self.assertNotIn(root.resolve(), staged[0].parents,
+                             'the build staged inside the checkout')
             self.assertFalse(staged[0].exists(), 'a finished build kept its staging copy')
             self.assertFalse((root / '_trash').exists(),
                              'a finished build filed something in a checkout trash')

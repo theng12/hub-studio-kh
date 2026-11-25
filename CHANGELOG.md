@@ -2,6 +2,15 @@
 
 Plain-language changes appear first in each release and feed the app’s What’s New. Engineering details follow under Technical notes.
 
+## 0.6.262 — 2026-11-26
+
+- **Preparing this Mac's installer no longer leaves gigabytes of scratch files behind.** Each time the app's installer was built, the temporary copy it assembles was parked in the project's trash folder and kept there — 8.5 GB after one build. The build now assembles it in the system's temporary folder and removes it as soon as the installer is written. A failed build keeps its copy in that same temporary folder, where you can read it until the Mac restarts.
+- **Nothing about the app you use changes.** This is the build recipe's own housekeeping; the app's screens, models and jobs are exactly as they were.
+
+### Technical notes
+- `packaging/make_dmg.py`: the staging copy is `tempfile.mkdtemp(prefix='hub-dmg-stage-')` with no `dir=`, so it lands under the system temp folder; `shutil.rmtree` on success, printed path and no move on failure. The replaced-artifact archive (`preserve`) is unchanged — a superseded installer is still kept recoverably.
+- New test `test_a_finished_build_leaves_nothing_staged_in_the_checkout`: asserts the staging path is under the system temp folder, is removed when the build completes, and that no `_trash` appears in the checkout (issue row `20261125-49`).
+
 ## 0.6.261 — 2026-11-25
 
 - **Hub Studio KH keeps itself up to date.** The app now carries its own updater: it reads a signed release feed in the background and installs a new version once you accept it, asking the app to settle what it is doing first so a running job is never cut off, and it reopens by itself afterwards. Nothing opens in front of you while it checks or installs.

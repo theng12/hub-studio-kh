@@ -514,7 +514,9 @@ class SealedManifestPackagingTests(unittest.TestCase):
                         mount.rmdir()
             finally:
                 if dmg_path.exists():
-                    self.make_dmg.preserve(dmg_path, ROOT, 'test-dmgs')
+                    # Issue row 20261125-49: a test's throwaway artifact is not a superseded
+                    # installer, so it is removed, not filed into a checkout `_trash`.
+                    dmg_path.unlink()
 
 
 if __name__ == "__main__":
