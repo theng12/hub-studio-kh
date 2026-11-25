@@ -63,8 +63,10 @@ own session. GitHub shows two objects: **`458229393`** (14:30:02Z), the one that
 same pass by the session that published the release. Nothing was lost and nothing burned: the deleted
 object never held an asset.
 
-Which run created which object cannot be proved from GitHub, because both runs pushed as the same
-account. What each run observed: the lead's `gh release create` printed
+The two creates are two minutes apart (14:30:02Z and 14:32:07Z), and one `gh release create`
+invocation creates one release, so two objects means two invocations in the same minutes — not a
+single command that abandoned its own draft. Which run created which object cannot be proved from
+GitHub, because both runs pushed as the same account. What each run observed: the lead's `gh release create` printed
 `HTTP 404 … /releases/458232180/assets` and `cleaning up draft failed` mid-run, naming the empty
 object; the Developer's run reports creating `458229393`. The lead did not retry, because a retry is
 how a second release appears.
