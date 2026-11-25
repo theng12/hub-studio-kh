@@ -31,6 +31,8 @@ release: non-draft `0.6.262` created `2026-11-25T21:57:33Z`, tag `0.6.262` → `
   create (checked first, per the claim rule). The bytes were read from the sealed DMG for the appcast:
   `CFBundleShortVersionString 0.6.262`, `SUFeedURL https://theng12.github.io/hub-studio-kh/appcast.xml`,
   and its `SUPublicEDKey` equals the key the signature verified against.
+  **Anonymous download of the published asset complete:** 1,483,564,032 B and sha256 `d77e196c…` — the same bytes,
+  and the served appcast signature verifies against that downloaded file, not only against the local one.
 dirty: false
 idle footprint: **125 MB after 600 s, 1 MB lower than at start**, ceiling 500 MB — the gate's own
   `idle-footprint` step started the staged build's Hub worker (`hub_worker.py`) hidden, temp data dir
