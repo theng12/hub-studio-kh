@@ -96,17 +96,33 @@ while [[ $# -gt 0 ]]; do
 done
 
 BUILD="$ROOT/.build"
-TRASH="$ROOT/_trash/build-inputs-$(date -u +%Y%m%d%H%M%S)"
+# **The trash is the Desktop's, never the checkout's.** A checkout that carries an `_trash` symlink
+# into `~/Desktop/_trash` is exactly what turned a routine replacement into `Permission denied`
+# (2026-11-25, issue row 20261125-32): the read-only YuE2 tree could not be renamed *through* the
+# link. The rule is one trash on the Desktop and no `_trash` inside a checkout, so this script names
+# the Desktop path itself and never traverses a link. `KH_BUILD_INPUTS_TRASH` overrides it (tests
+# point it at a temp dir).
+TRASH="${KH_BUILD_INPUTS_TRASH:-$HOME/Desktop/_trash/${STUDIOHUB_APP_SLUG:-hub-studio-kh}/build-inputs-$(date -u +%Y%m%d%H%M%S)}"
 STAMPED=0
 
 for command in uv git; do
   command -v "$command" >/dev/null || { echo "Missing command: $command" >&2; exit 1; }
 done
 [[ -d "$SOURCE/packaging" ]] || { echo "$SOURCE is not a Studio Hub checkout" >&2; exit 1; }
+if [[ -L "$TRASH" ]]; then
+  echo "STOP: the trash path $TRASH is a symlink; nothing is moved through a link. Unset KH_BUILD_INPUTS_TRASH or point it at a real folder." >&2
+  exit 1
+fi
+if [[ -e "$TRASH" && ! -d "$TRASH" ]]; then
+  echo "STOP: the trash path $TRASH exists and is not a directory; nothing is written through it." >&2
+  exit 1
+fi
 
 wanted() { [[ ",$ONLY," == *",$1,"* ]]; }
 
 # Nothing is deleted: a stale input joins the stamp folder the same way anything else does.
+# The builder seals its output `chmod -R a-w`, and a non-writable directory cannot be renamed
+# (issue row 20261119-20: "read-only files in the tree" → chmod first, then move).
 retire() {
   local path="$1"
   [[ -e "$path" ]] || return 0
@@ -116,6 +132,7 @@ retire() {
     echo "Replacing inputs go to $TRASH"
   fi
   echo "  moving $path aside"
+  chmod -R u+w "$path" 2>/dev/null || true
   mv "$path" "$TRASH/$(basename "$path")"
 }
 
@@ -235,8 +252,13 @@ if wanted yue2-runtime; then
     echo "  mlx-Yue at $YUE2_COMMIT; handing to packaging/yue2-runtime/build.sh"
     BUILT_LOG="$YUE2_CHECKOUT/yue2-runtime-build.log"
     bash "$SOURCE/packaging/yue2-runtime/build.sh" | tee "$BUILT_LOG"
-    retire "$BUILD/yue2-runtime"
-    move_runtime "$BUILT" "$BUILD/yue2-runtime"
+    # The builder writes under `$SOURCE/.build`. In this checkout that **is** `$BUILD`, so the fresh
+    # tree is already in place; moving it aside and then "restoring" it would file the new build in
+    # the trash and find nothing to move back (2026-11-25). Relocate only when the two differ.
+    if [[ "$BUILT" != "$BUILD/yue2-runtime" ]]; then
+      retire "$BUILD/yue2-runtime"
+      move_runtime "$BUILT" "$BUILD/yue2-runtime"
+    fi
 
     # `packaging/stage_voice.py` digests this tree and refuses a staging whose digest is not
     # `YUE2_RUNTIME_SHA256`, so a rebuild that lands anywhere else is a stop, not a warning — and
@@ -257,5 +279,7 @@ fi
 echo
 echo "Done. Sizes:"
 for name in prepare-kit.sh hub-gate test-deps yue2-runtime; do
-  [[ -e "$BUILD/$name" ]] && du -sh "$BUILD/$name"
+  # `--only` legitimately leaves inputs absent, and under `set -e` a false test as the loop's last
+  # command ended a successful run with status 1 (measured 2026-11-25, when only one input was asked for).
+  [[ -e "$BUILD/$name" ]] && du -sh "$BUILD/$name" || true
 done
