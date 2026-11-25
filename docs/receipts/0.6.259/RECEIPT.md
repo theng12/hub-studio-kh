@@ -40,14 +40,11 @@ idle footprint: **95 MB after 600 s, 28 MB lower than at start**, ceiling 500 MB
   the config; both facts are true. 0.6.258's equivalent figure was 64 MB / −58 MB, and 0.6.257's shell-only
   figure (service not started) was 103 → 75 MB — this number includes the service.
 retired: 0.6.257 installer (1,483,247,616 bytes, sha256 `e52628d63de1a261c14723aa282884f73626fe1786365a8aff5a34d09c933b6c`) plus `worktrees/0.6.258` (`4dd1f590`) and `worktrees/0.6.259` (`bcc5fe67`) moved to `$HOME/Desktop/_trash/hub-studio-kh/` with manifests (nothing freed until the owner empties the trash)
-not proven: (1) live self-update on this Mac (0.6.258 → 0.6.259) stopped at the visible-window guard:
-  neither `Hub Studio KH.app` nor `Studio Launcher KH.app` is installed in `/Applications`,
-  `com.khupdater.agent` is unloaded (`~/Library/KHUpdater/base/config.json` has no `hub` entry), and
-  `Recipes.swift:1482` relaunches with `open -g -j` while `native/StudioHub.swift:1337,1457-1459` calls
-  `openWindow()` (`window?.makeKeyAndOrderFront(nil)` + `NSApp.activate(ignoringOtherApps: true)`) whenever
-  `!loginLaunch || !controller.hasLibrary` (`~/StudioHubModels` is absent here) — so a live relaunch would
-  bring a visible window onto the owner's desktop; (2) whole-fleet / long-run states of the idle-footprint
-  acceptance — only the idle-after-one-cycle state was measured.
+not proven: (1) a live queued job held through an update (this Mac had no model library content, so the
+  owner-approved 0.6.258 → 0.6.259 live self-update ran with an empty queue: `queued 0 · running 0 · uncertain 0`);
+  (2) the `STUDIOHUB_LAUNCHED_AT_LOGIN=1` relaunch path (where `StudioHub.swift:1337` does not open a window);
+  (3) whole-fleet / long-run states of the idle-footprint acceptance — only the idle-after-one-cycle state
+  was measured.
 
 ## Gate runs — every attempt, kept as what it was
 
@@ -145,4 +142,4 @@ retired: `Hub Studio KH-0.6.257.dmg` (1,483,247,616 bytes, sha256 `e52628d63de1a
   - asset: `curl -fsSL -C - -o dl <browser_download_url>` (no auth header), resuming after three connection resets → `bytes=1483071488 sha=7b1542105dadadb14c333b335b2f8bee7a431e49a1af891cf3fff64e4661ee5c`; log at `lead/release-0.6.259-20261124/evidence/anon-readback-0.6.259.log`
 - idle footprint: `lead/gate-20261125-004811-50786/step-idle-footprint.log` —
   `idle footprint: pid 73384 = 95 MB after 600s, -28 MB while idle (ceiling 500 MB)`
-- install acceptance: UNMEASURED — stopped at the visible-window guard (see `not proven`: `Hub Studio KH.app` and `Studio Launcher KH.app` are absent from `/Applications`, `com.khupdater.agent` is unloaded with no `hub` entry, and `native/StudioHub.swift:1337,1457-1459` calls `openWindow()` + `NSApp.activate(ignoringOtherApps: true)` on `open -g -j` relaunch when `!loginLaunch || !controller.hasLibrary`)
+- install acceptance: **PASS (empty queue, owner-approved visible-window run)** — `lead/self-update-proof-20261125/PROOF.md` (`evidence/before.txt`, `after.txt`, `agent.log`, `hub-hold-requests.log`). Installed 0.6.258 from `app/dist/Hub Studio KH-0.6.258.dmg` into `/Applications/Hub Studio KH.app` (`CFBundleShortVersionString=0.6.258`, pid `47072`, `ps -o lstart=` `Wed Nov 25 08:37:58 2026`, service pid `47086`, `/api/health` `0.6.258 / b358d7d`). Plain `--once` respected the 60-minute rollout stagger (`its turn in the 60-minute rollout window is in 39 min`); explicit order `khu agent --config <temp> --install hub` (real installed `khu 0.1.80`, real signed feed, real hold token, temp `stateDir`) drove the update end to end with no operator step: held (`POST /api/maintenance/hold?timeout_s=20&pause_s=120` 200 OK, renewed `timeout_s=0&pause_s=120` 200 OK) → paused 120 s / updated (`hub: updated — timings: gone 2.6s · promoted 2.6s · launched 2.8s · appear-ceiling 120s 2.8s · appeared 2.8s · health-window 60s 2.8s · healthy 13.0s held; new work paused 120 s`) → relaunched at **`CFBundleShortVersionString=0.6.259`** (pid `54121`, `ps -o lstart=` `Wed Nov 25 08:44:47 2026`, service pid `54292` `08:45:02`, `/api/health` `0.6.259 / bcc5fe6`, `update_hold_active: false`, queue `0/0/0`). Hold/resume round-trip (`POST` → `update_hold_active: true`, `DELETE` → `update_hold_active: false`) also verified on the new 0.6.259 instance; Hub quit cleanly afterward and temp updater state moved to `$HOME/Desktop/_trash/hub-studio-kh/2026-11-25 self-update-proof-temp/` with a manifest. Note: the agent also adopted and brought stopped `Displays Studio KH` (`0.1.13`) and `Wire Studio KH` (`0.5.3`) to the feed's current versions.
