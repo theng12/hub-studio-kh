@@ -10,8 +10,9 @@
 set -euo pipefail
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 
-app="${1:?usage: hidden-launch.sh <app-bundle> [seconds]}"
+app="${1:?usage: hidden-launch.sh <app-bundle> [seconds] [app arguments...]}"
 seconds="${2:-6}"
+shift 2 2>/dev/null || shift $#
 exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
 [ -x "$exe" ] || { echo "Stopped: no executable at $exe" >&2; exit 1; }
 # A proof that can pass on a fixture key is not a proof of the shipped app: refuse unless the
@@ -27,8 +28,9 @@ data=$(mktemp -d "${TMPDIR:-/tmp}/kh-hidden-launch.XXXXXX")
 log="$data/app.log"
 
 # `--data-dir` is the shell's own override (it is what keeps a copy off the owner's real data and
-# off the login registration); `--background` keeps it windowless.
-"$exe" --background --data-dir "$data" >"$log" 2>&1 &
+# off the login registration); `--background` keeps it windowless. Anything after the seconds is
+# passed through, so a proof can give the copy its own model library or port.
+"$exe" --background --data-dir "$data" "$@" >"$log" 2>&1 &
 pid=$!
 sleep 1
 alive() { kill -0 "$pid" 2>/dev/null; }
