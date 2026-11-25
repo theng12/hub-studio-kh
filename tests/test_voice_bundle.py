@@ -743,7 +743,9 @@ class StagingTests(unittest.TestCase):
             with mock.patch.object(module, 'ROOT', repo), \
                     mock.patch.dict(sys.modules, {'stage_render_tools': stage_render_tools}), \
                     mock.patch.object(stage_render_tools, 'production_pins',
-                                      lambda _directory: tuple(pins)):
+                                      lambda _directory: tuple(pins)), \
+                    mock.patch.object(module, 'sparkle_public_key',
+                                      lambda: 'A' * 43 + '='):
                 try:
                     # The fixture runtime is synthetic, so it is not the tree the models were
                     # qualified on and `stage_voice` refuses it by design. The override is the
@@ -821,6 +823,16 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(plist['CFBundleIdentifier'], 'local.studiohub.standalone')
             self.assertNotIn('LSUIElement', plist)
             self.assertIn('microphone', plist['NSMicrophoneUsageDescription'].lower())
+            # In-app updates: Sparkle needs the appcast, the key its items are signed with, and
+            # the hold the app must be asked for before the bundle is swapped. CFBundleVersion
+            # changes per release or every update looks already installed.
+            self.assertEqual(plist['SUFeedURL'], module.HUB_APPCAST_URL)
+            self.assertEqual(plist['SUPublicEDKey'], 'A' * 43 + '=')
+            self.assertEqual(plist['KHHoldURL'],
+                             'http://127.0.0.1:47873/api/maintenance/hold')
+            self.assertEqual(plist['KHHoldTokenFile'], '~/Library/KHUpdater/state/hold-token')
+            self.assertEqual(plist['CFBundleVersion'], '0.2.0')
+            self.assertTrue((contents / 'Frameworks/Sparkle.framework/Versions/Current/Sparkle').is_file())
             # The background process is a named helper bundle, not a bare python3 (owner rule).
             helper_bundle = contents / 'Resources/helper/Hub Studio KH Helper.app'
             helper_exe = helper_bundle / 'Contents/MacOS/Hub Studio KH Helper'
@@ -876,10 +888,12 @@ class StagingTests(unittest.TestCase):
                 self.assertFalse((resources / 'video_worker.py').exists())
                 self.assertFalse((resources / 'components/video').exists())
                 self.assertTrue((resources / 'runtimes/music-yue2/bin/python3').is_file())
-            # payload_sha256 is POST-sign (excluding release-manifest.json and
-            # _CodeSignature); fixture native is not Mach-O so the seal rewrites nothing -
-            # real-Mach-O proof in tests/test_sealed_manifest_packaging.py.
-            self.assertEqual(manifest['payload_sha256'], module.tree_digest(
+            # payload_sha256 is POST-sign (excluding release-manifest.json and _CodeSignature),
+            # and it zeroes embedded signature blobs so it names the same bytes before and after
+            # sealing. The fixture's own native is not Mach-O, but the Sparkle framework it now
+            # carries is, so the seal does rewrite bytes here - the recorded value must still
+            # recompute from the signed bundle. A plain tree_digest would not.
+            self.assertEqual(manifest['payload_sha256'], module.payload_digest(
                 contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             # The per-file manifest a delta update is diffed against: present, self-consistent, and
             # describing exactly the bytes on disk (it lists release-manifest.json, not itself).
@@ -893,7 +907,7 @@ class StagingTests(unittest.TestCase):
             self.assertIn('Contents/MacOS/Hub Studio KH', file_manifest.flatten(groups))
             self.assertFalse((contents / 'Resources/file-manifest').exists())
             (contents / 'MacOS/Hub Studio KH').write_bytes(b'changed-native-shell')
-            self.assertNotEqual(manifest['payload_sha256'], module.tree_digest(
+            self.assertNotEqual(manifest['payload_sha256'], module.payload_digest(
                 contents, exclude={Path('Resources/release-manifest.json'), Path('_CodeSignature')}))
             return manifest
 

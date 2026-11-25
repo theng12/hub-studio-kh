@@ -132,9 +132,17 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(pin["sha256"], hashlib.sha256(data).hexdigest(), name)
 
     def test_the_publisher_file_is_written_from_the_descriptor(self):
+        """The shipped file keeps the pinned key and drops the addresses.
+
+        A DMG anyone can open must not carry the publisher's address: the updater reads it from
+        its own config when it enrols and refuses to enrol without one
+        (`stage_khu_agent.py`, "no address: a DMG anyone can open ...").
+        """
         result = stage_agent_kit(self.resources, self.kit, self.descriptor_path)
         staged = json.loads((result.staged_path / PUBLISHER_FILE).read_text())
-        self.assertEqual(staged, self.descriptor)
+        self.assertEqual(staged, {**self.descriptor, "feedURL": "", "enrolURL": ""})
+        self.assertEqual(staged["publicKey"], self.descriptor["publicKey"])
+        self.assertTrue(self.descriptor["feedURL"], "the fixture must carry an address to drop")
 
     def test_no_credential_lands_in_the_bundle(self):
         # The kit build never produces a token and the descriptor carries none, so neither

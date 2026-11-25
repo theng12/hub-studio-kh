@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Hub Studio KH</title>
+    <link>https://theng12.github.io/hub-studio-kh/appcast.xml</link>
+    <description>Hub Studio KH releases</description>
+    <language>en</language>
+  <item><title>0.6.261</title><pubDate>Wed, 25 Nov 2026 14:39:47 +0000</pubDate><sparkle:version>0.6.261</sparkle:version><sparkle:shortVersionString>0.6.261</sparkle:shortVersionString><sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion><enclosure url="https://github.com/theng12/hub-studio-kh/releases/download/0.6.261/Hub.Studio.KH-0.6.261.dmg" length="1483807744" type="application/octet-stream" sparkle:version="0.6.261" sparkle:shortVersionString="0.6.261" sparkle:edSignature="MXqjYaIQGlngGSsJY5I/Jjh8H6GcgFPJfm4N0Bmw+5nEJhAHczuwVfPZLwJEcBJogpZIab7P7+ZZmJUQCIyAAA==" /></item></channel>
+</rss>
