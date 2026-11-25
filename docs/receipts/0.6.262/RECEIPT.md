@@ -2,9 +2,10 @@
 
 app: hub
 version: 0.6.262
-commit: fc3964ef018651b24b03a1d338069a7bc3a07f7d (the gated code commit). The release carries one
-  further commit, `d718c50cc61a9ef7803f0675b6941d989fc707ee` (the signed appcast item), which is what tag
-  `0.6.262` points at. Merged `--no-ff` into `main` at `08ba1524`, pushed; `main` = `origin/main`.
+commit: fc3964ef018651b24b03a1d338069a7bc3a07f7d — **this is what tag `0.6.262` names** (read from
+  `git/ref/tags/0.6.262` → `{"type":"commit","sha":"fc3964ef…"}`), so the tag names the gated commit.
+  The appcast is a further commit, `d718c50cc61a9ef7803f0675b6941d989fc707ee`, merged with the rest into
+  `main` at `08ba1524` (receipt commit `82b1c516`, amended `6a9f7fc6`); `main` = `origin/main`, pushed.
 artifact: `$HOME/Developer/_orchestra/developer-media/hub-studio-kh/worktrees/release-0.6.262/dist/.candidates/Hub Studio KH-0.6.262.dmg`
 sha256: d77e196c500fe7ecd35b9e3bc8035b11882950ea6d1150eaf66f0800e9f1cad4
 bytes: 1483564032
@@ -18,14 +19,16 @@ gate evidence: `lead/gate-20261126-034418-35876` — 23 steps `ok`, run 7, runne
   `freeze-inputs` hashed 17 inputs at step 0 and `verify-inputs` reported
   **`all 17 gate inputs unchanged since the run started`** at the end, so this green is one run on one
   known set of scripts.
-feed readback: **UNMEASURED for `kh-releases`** — the row is the single publisher's pass (S001) and
-  `kh-releases` still serves hub 0.6.261. The release and the appcast are live and read back (below); only
-  the signed feed row is outstanding.
+feed readback: **SERVED 2026-11-25T22:24:54.253Z** — `kh-releases` serves `hub` **0.6.262**, sha
+  `d77e196c…`, 1,483,564,032 B, `Hub.Studio.KH-0.6.262.dmg`, tagline "Runs AI models on this Mac for your other
+  apps."; read back by M001 with `feed-verify.sh hub --expect-version 0.6.262 --expect-sha d77e196c…` → **PASS**.
+  S001's pass moved exactly one row (the other 13 byte-identical to `82be58c9`); envelope `0e0b597d…`,
+  `kh-releases` `62a5a89a1`. **Released, served and verified.**
 page state: **SERVED** — Pages serves `https://theng12.github.io/hub-studio-kh/appcast.xml` with 0.6.262 as
   its first item (0.6.261 second), enclosure `…/download/0.6.262/Hub.Studio.KH-0.6.262.dmg`,
   `length="1483564032"`, and the **served** item's Ed25519 signature verifies against Hub's pinned public key
   over the gated bytes (`appcast-verify.sh` → PASS).
-release: non-draft `0.6.262` created `2026-11-25T21:57:33Z`, tag `0.6.262` → `d718c50c`, **exactly 1 asset**
+release: non-draft `0.6.262` created `2026-11-25T21:57:33Z`, tag `0.6.262` → **`fc3964ef`** (the gated commit), **exactly 1 asset**
   `Hub.Studio.KH-0.6.262.dmg`, GitHub's stored digest `sha256:d77e196c…` equals the gated sha, anonymous
   request answers `content-length: 1483564032`. No prior release or draft for the tag existed before the
   create (checked first, per the claim rule). The bytes were read from the sealed DMG for the appcast:
@@ -39,10 +42,10 @@ idle footprint: **125 MB after 600 s, 1 MB lower than at start**, ceiling 500 MB
   and temp `HOME`, health 200, then the 600 s window. Same window, live routes on the staged app:
   `/api/hub/model-packages` and `/api/hub/model-presets` — both with zero `unknown` rows.
 retired: none — 0 bytes. Nothing removed from `dist/`; the candidate DMG stays in `.candidates`.
-not proven: (1) the `kh-releases` row — S001's single pass, still serving 0.6.261; (2) an installed
-  0.6.262 on any Mac (the Launcher's automatic install follows the feed row); (3) whole-fleet and long-run idle-footprint
-  states — only idle-after-one-cycle was measured; (4) archive, load-image, deploy, SPM and testKit
-  tests do not run on this host; xcodebuild itself is present; (5) the app tests not selected by
+not proven: (1) an installed 0.6.262 on any Mac — the feed now offers it, but no Mac has been read back
+  running it; (2) whole-fleet and long-run idle-footprint
+  states — only idle-after-one-cycle was measured; (3) archive, load-image, deploy, SPM and testKit
+  tests do not run on this host; xcodebuild itself is present; (4) the app tests not selected by
   `suites` (the gate runs 15 of 324 top-level `test_*.py` files — see "Suite scope" below).
 
 ## What this release changes
