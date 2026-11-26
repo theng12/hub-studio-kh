@@ -6,7 +6,10 @@ commit: fc3964ef018651b24b03a1d338069a7bc3a07f7d — **this is what tag `0.6.262
   `git/ref/tags/0.6.262` → `{"type":"commit","sha":"fc3964ef…"}`), so the tag names the gated commit.
   The appcast is a further commit, `d718c50cc61a9ef7803f0675b6941d989fc707ee`, merged with the rest into
   `main` at `08ba1524` (receipt commit `82b1c516`, amended `6a9f7fc6`); `main` = `origin/main`, pushed.
-artifact: `$HOME/Developer/_orchestra/developer-media/hub-studio-kh/worktrees/release-0.6.262/dist/.candidates/Hub Studio KH-0.6.262.dmg`
+artifact: `~/Developer/_orchestra/developer-media/hub-studio-kh/app/dist/Hub Studio KH-0.6.262.dmg` — the
+  surviving copy, sha256 `d77e196c…`, 1,483,564,032 B, measured in the same command as these figures. It was
+  built as `worktrees/release-0.6.262/dist/.candidates/Hub Studio KH-0.6.262.dmg`; that worktree was retired to
+  the Desktop trash at closeout, so the `.candidates` path no longer resolves and is not the one to read.
 sha256: d77e196c500fe7ecd35b9e3bc8035b11882950ea6d1150eaf66f0800e9f1cad4
 bytes: 1483564032
 scan: sha256=d77e196c500fe7ecd35b9e3bc8035b11882950ea6d1150eaf66f0800e9f1cad4 clean — `scan-dmg.sh`
@@ -118,4 +121,8 @@ here.
 - `dmg`: `step-dmg.log` (size before/after, `_trash` none/none, sha256, bytes, `hdiutil verify`)
 - `failed-build`: `step-failed-build.log` (interpreter, staging path, three OK lines)
 - `suites`: `step-suites.log` (module list, per-module rc, `failed=0`)
-- appcast / feed: UNMEASURED — nothing published from this session
+- feed row: `feed-verify.sh hub --expect-version 0.6.262 --expect-sha d77e196c…` → **PASS**, run
+  2026-11-26 against the live feed and quoted at its `published_at 2026-11-25T22:24:54.253Z` (14 rows).
+- appcast: `https://theng12.github.io/hub-studio-kh/appcast.xml` read at the same time — 0.6.262 is the
+  first item, `length="1483564032"`; its `edSignature` verified with `appcast-verify.sh` against Hub's
+  pinned public key over an anonymous download of the published asset (same sha, same length).
