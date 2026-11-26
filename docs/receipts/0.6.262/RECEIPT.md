@@ -44,11 +44,19 @@ idle footprint: **125 MB after 600 s, 1 MB lower than at start**, ceiling 500 MB
   `idle-footprint` step started the staged build's Hub worker (`hub_worker.py`) hidden, temp data dir
   and temp `HOME`, health 200, then the 600 s window. Same window, live routes on the staged app:
   `/api/hub/model-packages` and `/api/hub/model-presets` — both with zero `unknown` rows.
-retired: none — 0 bytes. Nothing removed from `dist/`; the candidate DMG stays in `.candidates`.
-not proven: (1) an installed 0.6.262 on any Mac — the feed now offers it, but no Mac has been read back
-  running it; (2) whole-fleet and long-run idle-footprint
-  states — only idle-after-one-cycle was measured; (3) archive, load-image, deploy, SPM and testKit
-  tests do not run on this host; xcodebuild itself is present; (4) the app tests not selected by
+retired: the gated worktree `worktrees/release-0.6.262` (8.9 GB: `.build` 7.4 GB and the 1.4 GB candidate) moved
+  whole to `~/Desktop/_trash/hub-studio-kh/2026-11-26 release-0.6.262 worktree/` with a MANIFEST — 112,686 files and
+  9,310,396 KB before and after the move; branch `release/0.6.262` kept (merged, not deleted). Nothing removed from
+  canonical `dist/`, which holds 0.6.262 (1,483,564,032 B) and 0.6.261 (1,483,807,744 B).
+install readback: **PASS 2026-11-26 (M001)** — `install-launch-check.sh` sha `237f979929b3` mounted the published DMG
+  read-only, copied the app out (`copy complete: 75461 entries, the same count as the image`) and launched it hidden
+  with its own data dir: `PASS: Hub Studio KH.app 0.6.262 launched hidden and is alive after 10s (pid 59576;
+  local.studiohub.standalone)`, no new crash report. Proves the published bytes start and report 0.6.262 on this Mac.
+  `/Applications/Hub Studio KH.app` is also 0.6.262, so the automatic install has taken it here; the Developer did not
+  install it, and this is not a check on the intended machine.
+not proven: (1) whole-fleet and long-run idle-footprint
+  states — only idle-after-one-cycle was measured; (2) archive, load-image, deploy, SPM and testKit
+  tests do not run on this host; xcodebuild itself is present; (3) the app tests not selected by
   `suites` (the gate runs 15 of 324 top-level `test_*.py` files — see "Suite scope" below).
 
 ## What this release changes
