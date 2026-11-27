@@ -40,6 +40,7 @@ import hub_rollout as hub  # noqa: E402
 
 VERSION = '0.6.999'
 BUILD = 'abc1234'
+REMOTE_GATEWAY = 'http://198.51.100.10:8787'
 TARGET = {'version': VERSION, 'build': BUILD,
           'sha256': 'a' * 64, 'bytes': 1234}
 WINDOW = 0.2
@@ -892,7 +893,7 @@ class GatewayOriginTests(unittest.TestCase):
         self.assertEqual(self.request.get_header('X-api-key'), 'test-key')
 
     def test_an_explicit_remote_base_names_its_own_origin_not_this_mac(self):
-        remote = 'http://127.0.0.1:8787'
+        remote = REMOTE_GATEWAY
         self.call(remote + '/')
         self.assertEqual(self.request.get_header('X-gateway-origin'), remote)
         self.assertNotEqual(self.request.get_header('X-gateway-origin'), hub.GATEWAY_URL)
@@ -1059,7 +1060,9 @@ class CoverageTests(unittest.TestCase):
         remote = FakeGateway([FakeSite('1700', ['1701', '1702'])], identity=self.identity)
         hub.Gateway = lambda base=hub.GATEWAY_URL: primary if base == hub.GATEWAY_URL else remote
         code = hub.main(['--artifact', str(self.artifact), '--version', VERSION,
-                         '--build', BUILD, '--evidence', str(self.evidence)])
+                         '--build', BUILD, '--coverage-gateway', hub.GATEWAY_URL,
+                         '--coverage-gateway', REMOTE_GATEWAY,
+                         '--evidence', str(self.evidence)])
         self.assertEqual(code, 1)
         after = json.loads(self.evidence.read_text())['coverage_after']
         self.assertEqual({r['machine'] for r in after['entities'] if r['site'] == '1700'},
@@ -1073,7 +1076,9 @@ class CoverageTests(unittest.TestCase):
         remote = FakeGateway([shared], identity=self.identity)
         hub.Gateway = lambda base=hub.GATEWAY_URL: primary if base == hub.GATEWAY_URL else remote
         code = hub.main(['--artifact', str(self.artifact), '--version', VERSION,
-                         '--build', BUILD, '--evidence', str(self.evidence)])
+                         '--build', BUILD, '--coverage-gateway', hub.GATEWAY_URL,
+                         '--coverage-gateway', REMOTE_GATEWAY,
+                         '--evidence', str(self.evidence)])
         after = json.loads(self.evidence.read_text())['coverage_after']
         self.assertEqual(code, 0)
         self.assertEqual(len(after['entities']), 2)

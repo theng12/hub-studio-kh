@@ -53,7 +53,7 @@ What changed:
     receipt records every read and the file's source path.
 
 Every outcome lands in one receipt: one row per site, and a table a person can read in one pass.
-Coverage also reads this Mac's and 1301's Gateway rosters before and after the rollout. Shared
+Coverage also reads the other Gateway's rosters when one is named before and after the rollout. Shared
 controller/member identities are counted once; online outdated/unhealthy members, missing members
 and unreadable rosters make the final exit nonzero even if this publisher's selected sites passed.
 Held, paused and offline entries stay explicit dispositions, never settings writes. Override the
@@ -85,8 +85,9 @@ SCHEMA = 'studiohub.hub-rollout-fanout.v1'
 SITE_SCHEMA = 'studiohub.hub-rollout-fanout.site.v1'
 
 GATEWAY_URL = os.environ.get('KH_GATEWAY_URL', 'http://127.0.0.1:8787')
-COVERAGE_GATEWAYS = os.environ.get(
-    'KH_ROLLOUT_COVERAGE_GATEWAYS', GATEWAY_URL + ',http://127.0.0.1:8787')
+#: The other Gateway's address is the operator's to supply: this public tree names no tailnet
+#: address, and main() says plainly when only this Mac was accounted for.
+COVERAGE_GATEWAYS = os.environ.get('KH_ROLLOUT_COVERAGE_GATEWAYS', GATEWAY_URL)
 GATEWAY_ENV = Path(os.path.expanduser('~/Library/Application Support/gateway-kh/.env'))
 GATEWAY_DB = Path(os.path.expanduser(
     '~/Library/Application Support/gateway-kh/data/gateway.sqlite3'))
@@ -1086,7 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
                         help='read both Gateway rosters without accepting or publishing an artifact')
     parser.add_argument('--coverage-gateway', action='append',
                         help='Gateway origin to account for (repeatable; defaults to '
-                             'KH_ROLLOUT_COVERAGE_GATEWAYS or this Mac plus 1301)')
+                             'KH_ROLLOUT_COVERAGE_GATEWAYS or this Mac alone)')
     parser.add_argument('--coverage-held-site', action='append', default=[],
                         help='existing held site id to record, not change (repeatable)')
     parser.add_argument('--evidence', required=True,
@@ -1117,6 +1118,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('--artifact and --build are required unless --coverage-only is used')
     gateway = Gateway()
     origins = args.coverage_gateway if args.coverage_gateway is not None else COVERAGE_GATEWAYS.split(',')
+    if args.coverage_gateway is None and not os.environ.get('KH_ROLLOUT_COVERAGE_GATEWAYS'):
+        note('only this Mac is accounted for; set KH_ROLLOUT_COVERAGE_GATEWAYS or repeat '
+             '--coverage-gateway to include another Gateway')
     coverage_gateways = {origin.strip().rstrip('/'): Gateway(base=origin.strip().rstrip('/'))
                          for origin in origins if origin.strip()}
     coverage_before = rollout_coverage(coverage_gateways, args.version, args.coverage_held_site)
